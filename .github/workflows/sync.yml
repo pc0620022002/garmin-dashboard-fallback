@@ -41,3 +41,48 @@ jobs:
             git commit -m "sync: cache JSON from private repo $(date -u +%Y-%m-%dT%H:%MZ)"
             git push
           fi
+
+      - name: Telegram notify on sync failure
+        if: ${{ failure() && env.TG_BOT_TOKEN != '' && env.TG_CHAT_ID != '' }}
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 <<'PY'
+          import os, urllib.request, urllib.parse, json
+          msg = (
+              "⚠️ *garmin-dashboard-fallback sync 失敗*\n\n"
+              "*【問題】*\n"
+              "從 private repo `cache` 分支拉 JSON 失敗 — fallback 資料停在上次成功 sync 時點。\n\n"
+              "*【可能原因】*\n"
+              "• `PRIVATE_REPO_TOKEN` PAT 過期 / 失效(到期 2027-05-20,但可能被你 revoke / GitHub 主動撤)\n"
+              "• private repo `garmin-dashboard` 不可訪問\n"
+              "• GitHub API rate limit / 短暫 outage\n\n"
+              "*【影響】*\n"
+              "• Railway 主站還活著 → 不影響你用 dashboard\n"
+              "• Railway 掛時 → 你看到的 fallback URL 會是舊資料\n\n"
+              "*【🔴 還需要你】*\n"
+              "• 看 https://github.com/pc0620022002/garmin-dashboard-fallback/settings/secrets/actions 確認 `PRIVATE_REPO_TOKEN` 是否還在\n"
+              "• 過期就建新 fine-grained PAT(scope: garmin-dashboard contents:Read-only)替換 secret\n\n"
+              f"[詳細 log]({os.environ['RUN_URL']})"
+          )
+          api = f"https://api.telegram.org/bot{os.environ['TG_BOT_TOKEN']}/sendMessage"
+          data = urllib.parse.urlencode({
+              "chat_id": os.environ["TG_CHAT_ID"],
+              "text": msg,
+              "parse_mode": "Markdown",
+              "disable_web_page_preview": "true",
+          }).encode("utf-8")
+          req = urllib.request.Request(api, data=data, method="POST")
+          try:
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  result = json.loads(resp.read().decode("utf-8"))
+                  if result.get("ok"):
+                      print(f"✅ TG 已推送(message_id={result['result']['message_id']})")
+                  else:
+                      print(f"⚠️  TG API 回非 ok: {result}")
+          except Exception as e:
+              print(f"⚠️  TG 推送失敗: {type(e).__name__}: {e}")
+              print("    (沒設 TG_BOT_TOKEN/TG_CHAT_ID secret 也會走這條,不影響 workflow status)")
+          PY

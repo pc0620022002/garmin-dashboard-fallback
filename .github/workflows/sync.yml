@@ -1,4 +1,4 @@
-  name: Sync cache from private repo
+name: Sync cache from private repo
 
   on:
     schedule:

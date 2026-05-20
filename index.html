@@ -1,0 +1,1370 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="robots" content="noindex,nofollow"/>
+<title>Garmin 訓練儀表板（離線備援版）</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0f1a;color:#e2e8f0;min-height:100vh}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#111827}::-webkit-scrollbar-thumb{background:#374151;border-radius:3px}
+a{color:#3b82f6}
+.wrap{max-width:1200px;margin:0 auto;padding:16px 20px}
+.card{background:linear-gradient(135deg,#1a2235,#1e293b);border-radius:14px;padding:20px;border:1px solid rgba(30,58,95,.13);margin-bottom:16px}
+.row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.stat{flex:1 1 170px;min-width:150px;position:relative;overflow:hidden}
+.stat .icon{position:absolute;top:10px;right:14px;font-size:26px;opacity:.25}
+.stat .label{font-size:12px;color:#64748b;margin-bottom:2px}
+.stat .val{font-size:26px;font-weight:700;font-family:monospace}
+.stat .sub{font-size:11px;color:#475569;margin-top:2px}
+.btn{border:none;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;transition:all .15s;font-family:inherit}
+.btn-p{background:#3b82f6;color:#fff}.btn-p:hover{background:#2563eb}
+.btn-g{background:transparent;color:#94a3b8;border:1px solid #334155}.btn-g:hover{background:#1e293b}
+.btn-a{background:#3b82f6;color:#fff;border:1px solid #3b82f6}
+.inp{background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:6px 10px;font-size:13px;font-family:inherit}
+.nav{display:flex;gap:4px;flex-wrap:wrap;background:#111827;border-radius:10px;padding:4px;margin-bottom:14px}
+.nav .btn{border-radius:8px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px 12px;font-size:12px;color:#64748b;border-bottom:1px solid #1e3a5f;font-weight:500}
+td{padding:10px 12px;font-size:13px;border-bottom:1px solid rgba(30,58,95,.19)}
+tr:hover td{background:rgba(30,41,59,.25)}
+.chart-box{position:relative;width:100%;height:320px}
+.chart-box canvas{width:100%!important;height:100%!important}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:28px">⌚</span>
+      <div>
+        <h1 style="font-size:20px;font-weight:700">Garmin 訓練儀表板 <span style="font-size:12px;font-weight:400;color:#3b82f6">v2</span></h1>
+        <p id="headerSub" style="font-size:11px;color:#475569">Forerunner 255 · 🎮 展示模式</p>
+      </div>
+    </div>
+    <button id="authBtn" class="btn btn-g" style="font-size:12px;padding:6px 14px" onclick="doLogin()">🔒 管理登入</button>
+  </div>
+
+  <!-- Nav -->
+  <div class="nav" id="nav"></div>
+
+  <!-- Date controls -->
+  <div id="dateBar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:18px">
+    <input type="date" id="startDate" class="inp"/>
+    <span style="color:#475569">→</span>
+    <input type="date" id="endDate" class="inp"/>
+    <button class="btn btn-g" onclick="setQuick(30)">30天</button>
+    <button class="btn btn-g" onclick="setQuick(90)">90天</button>
+    <button class="btn btn-g" onclick="setQuick(182)">半年</button>
+    <button class="btn btn-g" onclick="setQuick(365)">1年</button>
+    <button class="btn btn-g" onclick="setQuick(730)">2年</button>
+    <button class="btn btn-g" onclick="setQuick(1825)">5年</button>
+  </div>
+
+  <!-- Page containers -->
+  <div id="page-vo2max"></div>
+  <div id="page-compare" class="hidden"></div>
+  <div id="page-predict" class="hidden"></div>
+  <div id="page-monthly" class="hidden"></div>
+  <div id="page-races" class="hidden"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+// GLOBALS
+// ═══════════════════════════════════════════════
+let ALL_ACTS = [];
+let IS_DEMO = true;
+let CURRENT_PAGE = 'vo2max';
+let charts = {}; // store chart instances for cleanup
+const TODAY = new Date().toISOString().slice(0,10);
+
+// ═══════════════════════════════════════════════
+// ADMIN AUTH
+// ═══════════════════════════════════════════════
+let _isAdmin = false;
+function adminKey(){return sessionStorage.getItem('adminKey')||''}
+function isAdmin(){return _isAdmin}
+function adminHeaders(){return _isAdmin?{'X-Admin-Key':adminKey()}:{}}
+function doLogin(){
+  alert('📂 這是離線備援版（GitHub Pages 靜態鏡像）\n\n資料每天 22:30 從 GitHub cache 分支同步一次,只能讀,不能編輯 / 手動 refresh。\n\n要管理功能請開 Railway 版本:\nhttps://garmin-dashboard-production-d5dd.up.railway.app');
+}
+function doLogout(){
+  sessionStorage.removeItem('adminKey');_isAdmin=false;updateAuthUI();renderPage();
+}
+function updateAuthUI(){
+  const btn=$('authBtn');
+  if(!btn)return;
+  if(_isAdmin){btn.textContent='🔓 登出管理';btn.onclick=doLogout;btn.title='已登入，點擊登出';}
+  else{btn.textContent='🔒 管理登入';btn.onclick=doLogin;btn.title='點擊輸入密碼';}
+  // Show/hide refresh button
+  const rb=$('refreshBtn');
+  if(rb&&!_isAdmin)rb.remove();
+  if(!rb&&_isAdmin&&window.addRefreshButton)window.addRefreshButton();
+}
+// Try auto-login from sessionStorage on load
+function tryAutoLogin(){
+  return Promise.resolve();
+  // 離線備援版沒有 admin,以下原邏輯不會跑
+  return fetch('/api/auth',{headers:{'X-Admin-Key':adminKey()}})
+    .then(r=>{if(r.ok){_isAdmin=true;}else{sessionStorage.removeItem('adminKey');}})
+    .catch(()=>{});
+}
+
+const COLORS = {running:'#3b82f6',cycling:'#10b981',swimming:'#f59e0b'};
+const SPORT_NAMES = {running:'跑步',cycling:'騎車',swimming:'游泳'};
+const ICONS = {running:'🏃',cycling:'🚴',swimming:'🏊'};
+const TRAIN_NAMES = {tempo:'Tempo',double_tempo:'DoubleTempo',interval:'Interval',hiit:'HIIT',tempo_interval:'Tempo+Int.',long:'LSD',easy:'Easy',race:'Race',general:'General'};
+const TRAIN_COLORS = {tempo:'#8b5cf6',double_tempo:'#a855f7',interval:'#ef4444',hiit:'#ff6b35',tempo_interval:'#d946ef',long:'#06b6d4',easy:'#22c55e',race:'#f43f5e',general:'#64748b'};
+const SWIM_GEAR_NAMES = {trunks:'泳褲',trisuit:'三鐵衣',buoyancy:'浮力褲'};
+const SWIM_GEAR_COLORS = {trunks:'#0ea5e9',trisuit:'#f59e0b',buoyancy:'#10b981'};
+
+// Chart.js defaults
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = '#1e3a5f40';
+Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif";
+Chart.defaults.font.size = 11;
+Chart.defaults.plugins.tooltip.backgroundColor = '#111827';
+Chart.defaults.plugins.tooltip.borderColor = '#334155';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.cornerRadius = 8;
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+
+// 季節背景 plugin：11-4月涼季深色底、5-10月熱季淺色底
+// 適用 time scale — 按月份邊界畫色塊
+const seasonBgPlugin={
+  id:'seasonBg',
+  beforeDraw(chart){
+    const {ctx,chartArea,scales}=chart;
+    if(!chartArea||!scales.x)return;
+    const xScale=scales.x;
+    const {top,bottom,left,right}=chartArea;
+    // 取得 x 軸的最小/最大日期（毫秒）
+    const xMin=xScale.min, xMax=xScale.max;
+    if(!xMin||!xMax||xMin>=xMax)return;
+    const dMin=new Date(xMin), dMax=new Date(xMax);
+    // 從最小日期的月初開始，逐月畫背景
+    let cur=new Date(dMin.getFullYear(),dMin.getMonth(),1);
+    while(cur<=dMax){
+      const next=new Date(cur.getFullYear(),cur.getMonth()+1,1);
+      const m=cur.getMonth()+1; // 1-12
+      const isHot=m>=5&&m<=10;
+      const x0=Math.max(left,xScale.getPixelForValue(cur.getTime()));
+      const x1=Math.min(right,xScale.getPixelForValue(next.getTime()));
+      if(x1>x0){
+        ctx.save();
+        ctx.fillStyle=isHot?'rgba(234,179,8,0.07)':'rgba(59,130,246,0.05)';
+        ctx.fillRect(x0,top,x1-x0,bottom-top);
+        ctx.restore();
+      }
+      cur=next;
+    }
+  }
+};
+Chart.register(seasonBgPlugin);
+
+// ═══════════════════════════════════════════════
+// UTILITY
+// ═══════════════════════════════════════════════
+function fmtDur(s){if(!s||s<=0)return'--';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`}
+function fmtPace(type,pace){if(!pace)return'--';if(type==='cycling')return pace.toFixed(1)+' km/h';let p=pace;if(type==='swimming')p=pace/10;const m=Math.floor(p),s=Math.round((p-m)*60);return`${m}:${String(s).padStart(2,'0')}`+(type==='swimming'?'/100m':'/km')}
+function $(id){return document.getElementById(id)}
+function el(tag,attrs,children){const e=document.createElement(tag);if(attrs)Object.entries(attrs).forEach(([k,v])=>{if(k==='style'&&typeof v==='object')Object.assign(e.style,v);else if(k.startsWith('on'))e.addEventListener(k.slice(2).toLowerCase(),v);else e.setAttribute(k,v)});if(children){if(typeof children==='string')e.textContent=children;else if(Array.isArray(children))children.forEach(c=>{if(c)e.appendChild(typeof c==='string'?document.createTextNode(c):c)});}return e}
+function clearEl(id){const e=$(id);if(e)e.innerHTML='';return e}
+function destroyChart(name){if(charts[name]){charts[name].destroy();delete charts[name]}}
+function getFiltered(){const s=$('startDate').value,e=$('endDate').value;return ALL_ACTS.filter(a=>a.date>=s&&a.date<=e)}
+function setQuick(days){const e=new Date(TODAY),s=new Date(TODAY);s.setDate(s.getDate()-days);$('startDate').value=s.toISOString().slice(0,10);$('endDate').value=e.toISOString().slice(0,10);renderPage()}
+
+// ═══════════════════════════════════════════════
+// TRAINING TYPE DETECTION
+// ═══════════════════════════════════════════════
+function detectType(a){
+  const n=(a.name||'').toLowerCase();
+  // race 最優先 — 檔名有 race 就是比賽
+  if(/race|比賽|馬拉松|半馬|三鐵|鐵人|triathlon|marathon/i.test(n))return'race';
+  // 複合型態
+  if(/tempo\+int\.|tempo\+interval|節奏\+間歇/.test(n))return'tempo_interval';
+  if(/雙節奏|double.?tempo|2x.?tempo/.test(n))return'double_tempo';
+  if(/hiit/.test(n))return'hiit';
+  if(/int\.|interval|間歇|速度/.test(n))return'interval';
+  if(/tempo|節奏|乳酸閾|lt|threshold/.test(n))return'tempo';
+  if(/lsd|長距離|long|長跑/.test(n))return'long';
+  if(/easy/.test(n))return'easy';
+  return'general';
+}
+
+// 游泳裝備分類
+function detectSwimGear(a){
+  const n=(a.name||'').toLowerCase();
+  if(/三鐵衣|trisuit|tri.?suit/.test(n))return'trisuit';
+  if(/浮力褲|buoyancy|浮力/.test(n))return'buoyancy';
+  if(/泳褲|swim.?trunk|jammers?/.test(n))return'trunks';
+  return'trunks'; // 預設泳褲
+}
+
+// 從 tempo 活動名稱抓 (tempo) 後面的距離標註,例如 "(tempo) 5k" → 5
+// 沒有標註回傳 null,該活動就不會出現在任何距離分頁
+function tempoNameDist(name){
+  const m=/\(tempo\)\s*(\d+(?:\.\d+)?)\s*k/i.exec(name||'');
+  return m?parseFloat(m[1]):null;
+}
+
+// ═══════════════════════════════════════════════
+// RACE PREDICTION FORMULAS
+// ═══════════════════════════════════════════════
+function riegelPredict(d1,t1,d2){return t1*Math.pow(d2/d1,1.06)}
+function calcVDOT(dKm,tSec){const dM=dKm*1000,tMin=tSec/60,spd=dM/tMin;const pct=0.8+0.1894393*Math.exp(-0.012778*tMin)+0.2989558*Math.exp(-0.1932605*tMin);const vo2=-4.60+0.182258*spd+0.000104*spd*spd;return vo2/pct}
+function vdotPredict(vdot,dM){let lo=dM/7,hi=dM/1.5;for(let i=0;i<50;i++){const mid=(lo+hi)/2;if(calcVDOT(dM/1000,mid)>vdot)lo=mid;else hi=mid}return(lo+hi)/2}
+
+// ═══════════════════════════════════════════════
+// DEMO DATA
+// ═══════════════════════════════════════════════
+function generateDemo(){
+  const acts=[];const now=new Date(2026,3,17);
+  const rNames=['晨跑','間歇跑 5x1000m','Tempo Run 8K','LSD 長距離','輕鬆恢復跑','配速跑','節奏跑','Track Interval','Easy Run','週末長跑'];
+  const raceNames=['比賽 - 渣打半馬','比賽 - 台北馬拉松','比賽 - 萬金石馬拉松','比賽 - 日月潭10K','比賽 - 田中馬拉松','比賽 - 太魯閣馬拉松'];
+  const bNames=['公路騎乘','環河自行車道','長距離騎乘','Bike Interval','輕鬆騎'];
+  const sNames=['自由式練習','混合式訓練','長距離游泳','間歇游泳','開放水域練習'];
+
+  for(let i=0;i<365*5;i++){
+    const d=new Date(now);d.setDate(d.getDate()-i);
+    const n=Math.random()>0.4?(Math.random()>0.85?2:1):0;
+    for(let j=0;j<n;j++){
+      const tr=Math.random();const type=tr<0.5?'running':tr<0.8?'cycling':'swimming';
+      const progress=1+i/365*0.08;const noise=0.92+Math.random()*0.16;
+      let distance,duration,avgHR,maxHR,calories,avgPace,name,vo2max=null,elevGain=0,cadence=null;
+
+      if(type==='running'){
+        const isInt=Math.random()<0.18,isTempo=!isInt&&Math.random()<0.22,isLong=!isInt&&!isTempo&&Math.random()<0.13,isRace=!isInt&&!isTempo&&!isLong&&Math.random()<0.025;
+        if(isRace){
+          const rt=Math.random();
+          if(rt<0.35){distance=21.1;name=raceNames[Math.floor(Math.random()*3)];}
+          else if(rt<0.55){distance=42.195;name='比賽 - '+['台北馬拉松','萬金石馬拉松','田中馬拉松','太魯閣馬拉松'][Math.floor(Math.random()*4)];}
+          else if(rt<0.8){distance=10;name='比賽 - 日月潭10K';}
+          else{distance=5;name='比賽 - 5K路跑';}
+          avgPace=+(4.0*progress*noise+(distance>30?0.5:0)).toFixed(2);avgHR=Math.round(170+Math.random()*10);maxHR=Math.round(186+Math.random()*8);
+        }else if(isInt){
+          distance=+(6+Math.random()*4).toFixed(2);name=['間歇跑 5x1000m','Track Interval'][Math.floor(Math.random()*2)];
+          avgPace=+(3.8*progress*noise).toFixed(2);avgHR=Math.round(162+Math.random()*14);maxHR=Math.round(185+Math.random()*10);
+        }else if(isTempo){
+          distance=+(6+Math.random()*8).toFixed(2);name=['Tempo Run 8K','節奏跑','配速跑'][Math.floor(Math.random()*3)];
+          avgPace=+(4.3*progress*noise).toFixed(2);avgHR=Math.round(153+Math.random()*11);maxHR=Math.round(173+Math.random()*10);
+        }else if(isLong){
+          distance=+(18+Math.random()*14).toFixed(2);name='LSD 長距離';
+          avgPace=+(5.2*progress*noise).toFixed(2);avgHR=Math.round(141+Math.random()*11);maxHR=Math.round(163+Math.random()*10);
+        }else{
+          distance=+(4+Math.random()*8).toFixed(2);name=['輕鬆恢復跑','Easy Run','晨跑'][Math.floor(Math.random()*3)];
+          avgPace=+(5.5*progress*noise).toFixed(2);avgHR=Math.round(132+Math.random()*14);maxHR=Math.round(153+Math.random()*12);
+        }
+        duration=Math.round(distance*avgPace*60);calories=Math.round(distance*65+Math.random()*80);
+        cadence=Math.round(168+Math.random()*16);elevGain=Math.round(distance*7+Math.random()*40);
+        vo2max=Math.round(46+i/365*1.2+Math.random()*4);
+      }else if(type==='cycling'){
+        const isL=Math.random()<0.25;
+        distance=isL?+(60+Math.random()*60).toFixed(1):+(20+Math.random()*40).toFixed(1);
+        name=bNames[Math.floor(Math.random()*bNames.length)];
+        const speed=24+Math.random()*10-i/365*0.3;avgPace=+speed.toFixed(1);duration=Math.round((distance/speed)*3600);
+        avgHR=Math.round(129+Math.random()*24);maxHR=Math.round(avgHR+13+Math.random()*19);
+        calories=Math.round(distance*28+Math.random()*100);elevGain=Math.round(distance*5+Math.random()*80);
+      }else{
+        distance=+(0.8+Math.random()*2.5).toFixed(2);name=sNames[Math.floor(Math.random()*sNames.length)];
+        const pace100=1.6+Math.random()*0.6+i/365*0.03;avgPace=+pace100.toFixed(2);duration=Math.round(distance*10*pace100*60);
+        avgHR=Math.round(126+Math.random()*29);maxHR=Math.round(avgHR+11+Math.random()*17);
+        calories=Math.round(distance*200+Math.random()*80);
+      }
+      const tt=detectType({name,type,distance,avgHR});
+      acts.push({id:`a-${i}-${j}`,date:d.toISOString().slice(0,10),type,name,distance,duration,avgHR,maxHR,
+        calories,avgPace,cadence,elevGain,vo2max,trainingType:tt,isRace:tt==='race',
+        rpe:avgHR?Math.min(10,Math.max(1,Math.round((avgHR-100)/10+Math.random()*2))):null});
+    }
+  }
+  return acts.sort((a,b)=>b.date.localeCompare(a.date));
+}
+
+// ═══════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════
+const PAGES=[
+  {id:'vo2max',label:'🫁 VO2max 趨勢'},
+  {id:'compare',label:'📊 訓練比較'},
+  {id:'predict',label:'🏁 比賽預測'},
+  {id:'monthly',label:'📅 月訓練量'},
+  {id:'races',label:'🏅 賽事紀錄'}
+];
+
+function initNav(){
+  const nav=$('nav');
+  PAGES.forEach(p=>{
+    const b=el('button',{class:'btn '+(p.id===CURRENT_PAGE?'btn-p':'btn-g'),onClick:()=>switchPage(p.id)},p.label);
+    b.id='nav-'+p.id;
+    nav.appendChild(b);
+  });
+}
+
+function switchPage(id){
+  CURRENT_PAGE=id;
+  PAGES.forEach(p=>{
+    const pg=$('page-'+p.id);if(pg)pg.classList.toggle('hidden',p.id!==id);
+    const nb=$('nav-'+p.id);if(nb){nb.className='btn '+(p.id===id?'btn-p':'btn-g');}
+  });
+  $('dateBar').style.display=(id==='races'||id==='predict')?'none':'flex';
+  renderPage();
+}
+
+// ═══════════════════════════════════════════════
+// PAGE: VO2max TREND
+// ═══════════════════════════════════════════════
+let VO2MAX_DATA=null; // 快取 VO2max 訓練狀態資料
+
+function renderVO2max(){
+  const c=clearEl('page-vo2max');
+
+  // 如果已有快取資料，直接渲染；否則先從 API 載入
+  if(VO2MAX_DATA){
+    renderVO2maxChart(c,VO2MAX_DATA);
+  }else if(!IS_DEMO){
+    c.innerHTML='<div class="card" style="text-align:center;padding:40px;color:#475569">⏳ 正在從 Garmin 載入 VO2max 訓練狀態資料...</div>';
+    fetch('./vo2max_cache.json',{cache:'no-store'}).then(r=>r.json()).then(res=>{
+      VO2MAX_DATA=res.data||[];
+      const c2=clearEl('page-vo2max');
+      renderVO2maxChart(c2,VO2MAX_DATA);
+    }).catch(()=>{
+      clearEl('page-vo2max').innerHTML='<div class="card" style="text-align:center;padding:40px;color:#ef4444">⚠️ VO2max 資料載入失敗</div>';
+    });
+  }else{
+    // Demo mode fallback — use activity-level vo2max
+    const data=getFiltered().filter(a=>a.type==='running'&&a.vo2max).sort((a,b)=>a.date.localeCompare(b.date));
+    const fakeData=data.map(d=>({date:d.date,vo2max:d.vo2max}));
+    renderVO2maxChart(c,fakeData);
+  }
+}
+
+function renderVO2maxChart(c,data){
+  if(!data.length){c.appendChild(el('div',{class:'card',style:{textAlign:'center',padding:'40px',color:'#475569'}},'沒有 VO2max 訓練狀態資料'));return}
+
+  // 套用日期篩選
+  const startD=document.getElementById('startDate')?.value||'';
+  const endD=document.getElementById('endDate')?.value||'';
+  const filtered=data.filter(d=>(!startD||d.date>=startD)&&(!endD||d.date<=endD));
+  if(!filtered.length){c.appendChild(el('div',{class:'card',style:{textAlign:'center',padding:'40px',color:'#475569'}},'此日期範圍沒有 VO2max 資料'));return}
+
+  const latest=filtered[filtered.length-1].vo2max;
+  const oldest=filtered[0].vo2max;
+  const change=filtered.length>=2?latest-oldest:0;
+
+  const statsRow=el('div',{class:'row'});
+  [[`目前 VO2max`,latest,'ml/kg/min','#3b82f6','🫁'],
+   ['區間起始',oldest,'ml/kg/min','#64748b','📅'],
+   ['變化',`${change>0?'+':''}${typeof change==='number'?change.toFixed(1):change}`,change>0?'進步 ↑':change<0?'下降 ↓':'持平',change>0?'#22c55e':change<0?'#ef4444':'#94a3b8','📈'],
+   ['資料點',filtered.length,'筆（訓練狀態）','#f59e0b','📊']
+  ].forEach(([lb,vl,sb,cl,ic])=>{
+    const s=el('div',{class:'card stat'});
+    s.innerHTML=`<div class="icon">${ic}</div><div class="label">${lb}</div><div class="val" style="color:${cl}">${vl}</div><div class="sub">${sb}</div>`;
+    statsRow.appendChild(s);
+  });
+  c.appendChild(statsRow);
+
+  // Chart
+  const chartCard=el('div',{class:'card'});
+  chartCard.innerHTML='<h3 style="font-size:15px;font-weight:600;margin-bottom:14px">🫁 最大攝氧量趨勢（訓練狀態）</h3>';
+  const box=el('div',{class:'chart-box'});const cvs=el('canvas');box.appendChild(cvs);chartCard.appendChild(box);c.appendChild(chartCard);
+
+  destroyChart('vo2max');
+  charts.vo2max=new Chart(cvs,{type:'line',data:{
+    datasets:[
+      {label:'VO2max',data:filtered.map(d=>({x:d.date,y:d.vo2max})),borderColor:'#3b82f6',borderWidth:2.5,pointRadius:3,pointHoverRadius:5,pointBackgroundColor:'#3b82f6',tension:.3,fill:false}
+    ]
+  },options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+    scales:{x:{type:'time',time:{unit:'month',displayFormats:{month:'yy/MM'}},ticks:{maxTicksLimit:18}},y:{title:{display:true,text:'ml/kg/min'}}},
+    plugins:{tooltip:{callbacks:{title:items=>{const i=items[0]?.dataIndex;return i!=null?filtered[i].date:''}}}}
+  }});
+
+  // Table
+  const tCard=el('div',{class:'card'});
+  tCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">📋 VO2max 訓練狀態紀錄</h3>
+  <div style="max-height:300px;overflow-y:auto"><table><thead><tr><th>日期</th><th>VO2max</th></tr></thead>
+  <tbody>${filtered.slice().reverse().slice(0,60).map(d=>`<tr><td>${d.date}</td><td style="font-weight:600;color:#3b82f6;font-family:monospace">${d.vo2max}</td></tr>`).join('')}</tbody></table></div>`;
+  c.appendChild(tCard);
+}
+
+// ═══════════════════════════════════════════════
+// PAGE: TRAINING COMPARISON
+// ═══════════════════════════════════════════════
+let compareState={sport:'running',runGroup:'tempo',runDist:'<5',bikeDist:'30-50',swimDist:'0-1.5',swimGear:'overview'};
+
+// 從訓練比較中隱藏活動
+const _hiddenStack=[];
+let _userEdits={paceEdits:{},hidden:[],dualPaceEdits:{}};
+
+// 用 activityId 作為穩定 key（改名後不會失效），fallback 用 date|name
+function editKey(a){return a.activityId?'aid:'+a.activityId:(a.date+'|'+a.name)}
+
+// ⚠️ 不再用「整份 POST」儲存編輯 — 改成 incremental endpoints,從根本杜絕 lost-update。
+// 原因:saveUserEdits 把當下記憶體 state 整份 POST 過去,只要記憶體 stale(多 tab、開很久沒刷新、跨裝置),
+// server 就會被舊資料整份覆蓋,server 上較新的編輯會被反向蓋掉(2026-04-26 真實事件,21 筆配速一次消失)。
+//
+// 新的儲存流程:每個操作呼叫對應的 incremental endpoint,只動 server 上一筆,其他編輯絕對不會被 touch。
+//   editPace(id, pace)        → POST   /api/edits/pace
+//   resetPace(id)             → DELETE /api/edits/pace/<aid>
+//   resetAllPaces()           → DELETE /api/edits/pace
+//   hideFromCompare(id)       → POST   /api/edits/hidden
+//   undoHide(id)              → DELETE /api/edits/hidden/<aid>
+//   editDualPace / resetDual  → POST/DELETE /api/edits/dual
+//
+// _userEdits 記憶體只在頁面 load 時從 GET /api/edits 同步,之後每次操作直接打 server,server 是 source of truth。
+
+function _editsApi(method, path, body){
+  // 離線備援版不能寫入(沒有 server)。提示 user 去 Railway 版本編輯。
+  alert('📂 離線備援版唯讀模式\n\n要編輯配速 / 隱藏紀錄請開 Railway 版本:\nhttps://garmin-dashboard-production-d5dd.up.railway.app');
+  return Promise.resolve(false);
+  // 以下原邏輯不會跑(留著當文件)
+  const opts={method,headers:{...adminHeaders()}};
+  if(body!==undefined){
+    opts.headers['Content-Type']='application/json';
+    opts.body=JSON.stringify(body);
+  }
+  return fetch(path,opts)
+    .then(r=>r.json().then(d=>({ok:r.ok,status:r.status,data:d})).catch(()=>({ok:r.ok,status:r.status,data:{}})))
+    .then(({ok,status,data})=>{
+      if(!ok){
+        alert('❌ 儲存失敗(HTTP '+status+'):'+method+' '+path+'\n請再試一次。如果一直失敗,看一下 Railway dashboard 是不是掛了。');
+        return false;
+      }
+      if(data && data.github_synced===false){
+        alert('⚠️ 已存到 server,但同步 GitHub 失敗。\n如果 Railway 容器在這段時間重啟,這筆編輯會丟失。\n建議:過 30 秒後重新操作一次同樣的編輯來重推 GitHub。');
+        return false;
+      }
+      return true;
+    })
+    .catch(e=>{
+      alert('❌ 儲存失敗(網路斷了或 server 沒回應):'+e.message+'\n你的編輯沒推到 server。請重試。');
+      return false;
+    });
+}
+
+// 保留 saveUserEdits 函式名稱,但只當「同步本機 _userEdits 鏡像」用,不再 POST 任何東西。
+// 真正持久化交給呼叫處對應的 _editsApi。
+function saveUserEdits(){
+  const paceEdits={};
+  const hidden=[];
+  const dualPaceEdits={};
+  ALL_ACTS.forEach(a=>{
+    const key=editKey(a);
+    if(a._paceEdited){
+      paceEdits[key]={avgPace:a.avgPace,movingPace:a.movingPace};
+    }
+    if(a._hidden) hidden.push(key);
+    if(a._pace1!=null||a._pace2!=null){
+      dualPaceEdits[key]={pace1:a._pace1||null,pace2:a._pace2||null};
+    }
+  });
+  _userEdits={paceEdits,hidden,dualPaceEdits};
+}
+// 載入並套用儲存的修改
+function applyUserEdits(){
+  if(!_userEdits)return;
+  if(!_userEdits.dualPaceEdits) _userEdits.dualPaceEdits={};
+  ALL_ACTS.forEach(a=>{
+    const key=editKey(a);
+    // 也嘗試舊格式 key（相容舊的 user_edits.json）
+    const oldKey=a.date+'|'+a.name;
+    const pe=_userEdits.paceEdits[key]||_userEdits.paceEdits[oldKey];
+    if(pe){
+      if(a._origAvgPace===undefined) a._origAvgPace=a.avgPace;
+      if(a._origMovingPace===undefined) a._origMovingPace=a.movingPace;
+      a.avgPace=pe.avgPace;
+      a.movingPace=pe.movingPace;
+      a._paceEdited=true;
+    }
+    const dp=_userEdits.dualPaceEdits[key]||_userEdits.dualPaceEdits[oldKey];
+    if(dp){
+      a._pace1=dp.pace1;
+      a._pace2=dp.pace2;
+    }
+    if(_userEdits.hidden.includes(key)||_userEdits.hidden.includes(oldKey)){
+      a._hidden=true;
+    }
+  });
+}
+
+function hideFromCompare(id){
+  if(!isAdmin())return;
+  const a=ALL_ACTS.find(x=>x.id===id);
+  if(a){a._hidden=true;_hiddenStack.push(id)}
+  saveUserEdits();
+  if(a)_editsApi('POST','/api/edits/hidden',{activityId:editKey(a)});
+  renderCompare();
+}
+// 復原最後一筆隱藏
+function undoHide(){
+  if(!isAdmin())return;
+  const id=_hiddenStack.pop();
+  if(id){
+    const a=ALL_ACTS.find(x=>x.id===id);
+    if(a){
+      a._hidden=false;
+      _editsApi('DELETE','/api/edits/hidden/'+encodeURIComponent(editKey(a)));
+    }
+  }
+  saveUserEdits();
+  renderCompare();
+}
+// 修改活動的配速
+function editMovingPace(id){
+  if(!isAdmin())return;
+  const a=ALL_ACTS.find(x=>x.id===id);
+  if(!a)return;
+  if(a._origAvgPace===undefined) a._origAvgPace=a.avgPace;
+  if(a._origMovingPace===undefined) a._origMovingPace=a.movingPace;
+  const cur=a.movingPace||a.avgPace;
+  const curFmt=fmtPace(a.type,cur);
+  const input=prompt(`修改配速（目前 ${curFmt}）\n請輸入 M:SS 格式，例如 5:30`,curFmt);
+  if(!input)return;
+  const parts=input.split(':').map(Number);
+  if(parts.length===2&&!isNaN(parts[0])&&!isNaN(parts[1])){
+    const newPace=parts[0]+parts[1]/60;
+    a.movingPace=newPace;
+    a.avgPace=newPace;
+    a._paceEdited=true;
+    saveUserEdits();
+    _editsApi('POST','/api/edits/pace',{activityId:editKey(a),avgPace:newPace,movingPace:newPace});
+    renderCompare();
+  }else{alert('格式錯誤，請輸入 M:SS')}
+}
+// 復原單筆配速
+function resetPace(id){
+  if(!isAdmin())return;
+  const a=ALL_ACTS.find(x=>x.id===id);
+  if(!a||!a._paceEdited)return;
+  a.avgPace=a._origAvgPace;
+  a.movingPace=a._origMovingPace;
+  a._paceEdited=false;
+  saveUserEdits();
+  _editsApi('DELETE','/api/edits/pace/'+encodeURIComponent(editKey(a)));
+  renderCompare();
+}
+// 復原所有配速修改
+function resetAllPaces(){
+  if(!isAdmin())return;
+  if(!confirm('確定要復原所有配速修改嗎?(無法還原)'))return;
+  ALL_ACTS.forEach(a=>{
+    if(a._paceEdited){
+      a.avgPace=a._origAvgPace;
+      a.movingPace=a._origMovingPace;
+      a._paceEdited=false;
+    }
+  });
+  saveUserEdits();
+  _editsApi('DELETE','/api/edits/pace');
+  renderCompare();
+}
+
+// 修改雙配速（double_tempo / tempo_interval）
+function editDualPace(id,which){
+  if(!isAdmin())return;
+  const a=ALL_ACTS.find(x=>x.id===id);if(!a)return;
+  const isDT=a.trainingType==='double_tempo';
+  const labels=isDT?['一段配速','二段配速']:['tempo配速','int配速'];
+  const label=which===1?labels[0]:labels[1];
+  const cur=which===1?a._pace1:a._pace2;
+  const curFmt=cur?fmtPace('running',cur):'未填';
+  const input=prompt(`${label}（目前 ${curFmt}）\n請輸入 M:SS 格式，例如 4:30`,cur?curFmt:'');
+  if(!input)return;
+  const parts=input.split(':').map(Number);
+  if(parts.length===2&&!isNaN(parts[0])&&!isNaN(parts[1])){
+    const newPace=parts[0]+parts[1]/60;
+    if(which===1) a._pace1=newPace; else a._pace2=newPace;
+    saveUserEdits();
+    _editsApi('POST','/api/edits/dual',{activityId:editKey(a),pace1:a._pace1||null,pace2:a._pace2||null});
+    renderCompare();
+  }else{alert('格式錯誤，請輸入 M:SS')}
+}
+function resetDualPace(id){
+  if(!isAdmin())return;
+  const a=ALL_ACTS.find(x=>x.id===id);if(!a)return;
+  a._pace1=null;a._pace2=null;
+  saveUserEdits();
+  _editsApi('DELETE','/api/edits/dual/'+encodeURIComponent(editKey(a)));
+  renderCompare();
+}
+
+function renderCompare(){
+  const c=clearEl('page-compare');
+  const {sport,runGroup,runDist,bikeDist,swimDist,swimGear}=compareState;
+
+  // Sport buttons
+  const sportBar=el('div',{style:{display:'flex',gap:'8px',marginBottom:'12px',flexWrap:'wrap',alignItems:'center'}});
+  sportBar.appendChild(el('span',{style:{fontSize:'13px',color:'#64748b'}},'運動：'));
+  ['running','cycling','swimming'].forEach(s=>{
+    sportBar.appendChild(el('button',{class:'btn '+(sport===s?'btn-p':'btn-g'),onClick:()=>{compareState.sport=s;renderCompare()}},ICONS[s]+' '+SPORT_NAMES[s]));
+  });
+  c.appendChild(sportBar);
+
+  // Sub-filter
+  const subBar=el('div',{style:{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap',alignItems:'center'}});
+  if(sport==='running'){
+    subBar.appendChild(el('span',{style:{fontSize:'13px',color:'#64748b'}},'訓練類型：'));
+    ['tempo','double_tempo','interval','hiit','tempo_interval','long','easy'].forEach(t=>{
+      const active=runGroup===t;
+      const b=el('button',{class:'btn '+(active?'btn-a':'btn-g'),onClick:()=>{compareState.runGroup=t;renderCompare()}},TRAIN_NAMES[t]);
+      if(active)b.style.background=TRAIN_COLORS[t];
+      subBar.appendChild(b);
+    });
+    // tempo 距離分類
+    if(runGroup==='tempo'){
+      subBar.appendChild(el('span',{style:{fontSize:'13px',color:'#64748b',marginLeft:'12px'}},'距離：'));
+      [['<5','5k 以下'],['5-10','5-10k'],['10-15','10-15k'],['>15','15k 以上']].forEach(([v,lb])=>{
+        subBar.appendChild(el('button',{class:'btn '+(runDist===v?'btn-a':'btn-g'),onClick:()=>{compareState.runDist=v;renderCompare()}},lb));
+      });
+    }
+  }else if(sport==='cycling'){
+    subBar.appendChild(el('span',{style:{fontSize:'13px',color:'#64748b'}},'距離區間 (km)：'));
+    ['15-30','30-50','50-80','80-120'].forEach(r=>{
+      subBar.appendChild(el('button',{class:'btn '+(bikeDist===r?'btn-a':'btn-g'),onClick:()=>{compareState.bikeDist=r;renderCompare()}},r));
+    });
+  }else{
+    // 游泳：裝備分類(總覽 + 三種裝備)
+    subBar.appendChild(el('span',{style:{fontSize:'13px',color:'#64748b'}},'裝備：'));
+    ['overview','trunks','trisuit','buoyancy'].forEach(g=>{
+      const active=swimGear===g;
+      const label=g==='overview'?'總覽':SWIM_GEAR_NAMES[g];
+      const b=el('button',{class:'btn '+(active?'btn-a':'btn-g'),onClick:()=>{compareState.swimGear=g;renderCompare()}},label);
+      if(active&&g!=='overview')b.style.background=SWIM_GEAR_COLORS[g];
+      subBar.appendChild(b);
+    });
+    // 距離區間
+    subBar.appendChild(el('span',{style:{fontSize:'13px',color:'#64748b',marginLeft:'12px'}},'距離：'));
+    ['0-1.5','1.5+'].forEach(r=>{
+      const label=r==='0-1.5'?'1.5km 以下':'1.5km 以上';
+      subBar.appendChild(el('button',{class:'btn '+(swimDist===r?'btn-a':'btn-g'),onClick:()=>{compareState.swimDist=r;renderCompare()}},label));
+    });
+  }
+  c.appendChild(subBar);
+
+  // Filter data
+  let data=getFiltered().filter(a=>a.type===sport&&!a._hidden);
+  if(sport==='running'){
+    data=data.filter(a=>a.trainingType===runGroup);
+    if(runGroup==='tempo'){
+      // 用活動名稱裡 "(tempo) Xk" 的數字判斷距離
+      data=data.filter(a=>{
+        const d=tempoNameDist(a.name);
+        if(d==null) return false;
+        if(runDist==='<5') return d<5;
+        if(runDist==='5-10') return d>=5&&d<10;
+        if(runDist==='10-15') return d>=10&&d<15;
+        return d>=15;
+      });
+    }
+  }
+  else if(sport==='cycling'){const[lo,hi]=bikeDist.split('-').map(Number);data=data.filter(a=>a.distance>=lo&&a.distance<=hi)}
+  else{
+    // 距離過濾(總覽和個別裝備都套用)
+    if(swimDist==='0-1.5') data=data.filter(a=>a.distance<=1.5);
+    else data=data.filter(a=>a.distance>1.5);
+    // 個別裝備才再依 gear 過濾;'overview' 不過濾
+    if(swimGear!=='overview') data=data.filter(a=>detectSwimGear(a)===swimGear);
+  }
+  data.sort((a,b)=>a.date.localeCompare(b.date));
+
+  c.appendChild(el('div',{style:{fontSize:'12px',color:'#475569',marginBottom:'14px'}},`共 ${data.length} 筆`));
+
+  if(!data.length){c.appendChild(el('div',{class:'card',style:{textAlign:'center',padding:'40px',color:'#475569'}},'此條件下沒有找到活動紀錄'));return}
+
+  // Pace data — running always uses movingPace
+  const useMoving=sport==='running';
+  const getPace=d=>useMoving&&d.movingPace?d.movingPace:d.avgPace;
+  const isDualPace=sport==='running'&&(runGroup==='double_tempo'||runGroup==='tempo_interval');
+  const dualLabels=runGroup==='double_tempo'?['一段配速','二段配速']:['tempo配速','int配速'];
+
+  // Charts row
+  const chartRow=el('div',{class:'row'});
+
+  // Pace chart
+  const pCard=el('div',{class:'card',style:{flex:'1 1 480px'}});
+  const pTitle=sport==='cycling'?'均速 / 平均功率趨勢':'配速趨勢 (越低越好)';
+  pCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:14px">⏱️ ${pTitle}</h3>`;
+  const pBox=el('div',{class:'chart-box'});const pCvs=el('canvas');pBox.appendChild(pCvs);pCard.appendChild(pBox);chartRow.appendChild(pCard);
+
+  destroyChart('compPace');
+  const timeXScale={type:'time',time:{unit:'month',displayFormats:{month:'yy/MM'}},ticks:{maxTicksLimit:14}};
+  const isSwimOverview=sport==='swimming'&&swimGear==='overview';
+  if(isDualPace){
+    charts.compPace=new Chart(pCvs,{type:'line',data:{
+      datasets:[
+        {label:dualLabels[0],data:data.map(d=>({x:d.date,y:d._pace1||null})),borderColor:'#8b5cf6',borderWidth:2.5,pointRadius:4,pointBackgroundColor:'#8b5cf6',tension:.3,spanGaps:true,yAxisID:'y'},
+        {label:dualLabels[1],data:data.map(d=>({x:d.date,y:d._pace2||null})),borderColor:'#f59e0b',borderWidth:2.5,pointRadius:4,pointBackgroundColor:'#f59e0b',tension:.3,spanGaps:true,yAxisID:'y'},
+        {label:'體感溫度',data:data.map(d=>({x:d.date,y:d.temperature!=null?d.temperature:null})),borderColor:'#fb923c',borderWidth:1.8,pointRadius:3,pointBackgroundColor:'#fb923c',borderDash:[3,3],tension:.3,spanGaps:true,yAxisID:'y1'}
+      ]
+    },options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:false},
+      scales:{x:timeXScale,y:{reverse:true,ticks:{callback:v=>fmtPace('running',v)}},y1:{position:'right',display:false,grid:{drawOnChartArea:false}}},
+      plugins:{tooltip:{callbacks:{label:ctx=>{
+        if(ctx.dataset.yAxisID==='y1')return '體感溫度: '+(ctx.parsed.y!=null?ctx.parsed.y+'°C':'--');
+        return ctx.dataset.label+': '+(ctx.parsed.y?fmtPace('running',ctx.parsed.y):'未填');
+      },title:items=>{const i=items[0]?.dataIndex;return i!=null?`${data[i].date} · ${data[i].name}`:''}}}}
+    }});
+  }else if(isSwimOverview){
+    // 游泳總覽：泳褲 / 三鐵衣 / 浮力褲 三條獨立線
+    const gears=[['trunks','泳褲'],['trisuit','三鐵衣'],['buoyancy','浮力褲']];
+    const compDatasets=gears.map(([g,name])=>({
+      label:name,
+      data:data.map(d=>({x:d.date,y:detectSwimGear(d)===g?d.avgPace:null})),
+      borderColor:SWIM_GEAR_COLORS[g],
+      borderWidth:2.5,
+      pointRadius:4,
+      pointBackgroundColor:SWIM_GEAR_COLORS[g],
+      tension:.3,
+      spanGaps:true
+    }));
+    charts.compPace=new Chart(pCvs,{type:'line',data:{datasets:compDatasets},options:{
+      responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:false},
+      scales:{x:timeXScale,y:{reverse:true,ticks:{callback:v=>fmtPace('swimming',v)}}},
+      plugins:{tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.parsed.y?fmtPace('swimming',ctx.parsed.y):'未填'),
+        title:items=>{const i=items[0]?.dataIndex;return i!=null?`${data[i].date} · ${data[i].name}`:''}}}}
+    }});
+  }else{
+    const compDatasets=[
+      {label:sport==='cycling'?'均速 (km/h)':(sport==='running'?'移動配速':'配速'),data:data.map(d=>({x:d.date,y:getPace(d)})),borderColor:COLORS[sport],borderWidth:2.5,pointRadius:4,pointBackgroundColor:COLORS[sport],tension:.3,yAxisID:'y'}
+    ];
+    // 輕鬆跑加 7 次移動平均
+    if(sport==='running'&&runGroup==='easy'&&data.length>=7){
+      const ma7=data.map((d,i)=>{if(i<6)return{x:d.date,y:null};let s=0;for(let j=i-6;j<=i;j++)s+=getPace(data[j]);return{x:d.date,y:+(s/7).toFixed(3)}});
+      compDatasets.push({label:'7次移動平均',data:ma7,borderColor:'#f59e0b',borderWidth:2,pointRadius:0,borderDash:[6,3],tension:.3,spanGaps:true,yAxisID:'y'});
+    }
+    // 騎車：加入平均功率（右側 Y 軸）
+    if(sport==='cycling'){
+      compDatasets.push({label:'平均功率 (W)',data:data.map(d=>({x:d.date,y:d.avgPower||null})),borderColor:'#f59e0b',borderWidth:2.5,pointRadius:4,pointBackgroundColor:'#f59e0b',tension:.3,spanGaps:true,yAxisID:'y1'});
+    }
+    // 跑步：加入體感溫度（隱藏的右側 Y 軸,只顯示線 + tooltip）
+    if(sport==='running'){
+      compDatasets.push({label:'體感溫度',data:data.map(d=>({x:d.date,y:d.temperature!=null?d.temperature:null})),borderColor:'#fb923c',borderWidth:1.8,pointRadius:3,pointBackgroundColor:'#fb923c',borderDash:[3,3],tension:.3,spanGaps:true,yAxisID:'y1'});
+    }
+    const scales={x:timeXScale,y:{reverse:sport!=='cycling',ticks:{callback:v=>fmtPace(sport,v)},title:{display:sport==='cycling',text:'km/h'}}};
+    if(sport==='cycling'){
+      scales.y1={position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'瓦特 (W)'}};
+    }else if(sport==='running'){
+      scales.y1={position:'right',display:false,grid:{drawOnChartArea:false}};
+    }
+    charts.compPace=new Chart(pCvs,{type:'line',data:{
+      datasets:compDatasets
+    },options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:false},
+      scales,
+      plugins:{tooltip:{callbacks:{label:ctx=>{
+        if(sport==='running'&&ctx.dataset.yAxisID==='y1')return '體感溫度: '+(ctx.parsed.y!=null?ctx.parsed.y+'°C':'--');
+        const isPower=ctx.dataset.yAxisID==='y1';
+        if(isPower)return ctx.dataset.label+': '+(ctx.parsed.y!=null?ctx.parsed.y+' W':'無資料');
+        return ctx.dataset.label+': '+fmtPace(sport,ctx.parsed.y);
+      },
+        title:items=>{const i=items[0]?.dataIndex;return i!=null?`${data[i].date} · ${data[i].name}`:''}}}}
+    }});
+  }
+
+  destroyChart('compHR');
+  destroyChart('compPower');
+
+  // Table with delete + editable pace
+  const tCard=el('div',{class:'card'});
+  const swimDistLabel=swimDist==='0-1.5'?'1.5km 以下':'1.5km 以上';
+  const runDistLabels={'<5':'5k 以下','5-10':'5-10k','10-15':'10-15k','>15':'15k 以上'};
+  const runDistSuffix=(sport==='running'&&runGroup==='tempo')?' '+runDistLabels[runDist]:'';
+  const swimPrefix=sport==='swimming'?(swimGear==='overview'?'總覽 ':SWIM_GEAR_NAMES[swimGear]+' '):'';
+  const groupLabel=sport==='running'?TRAIN_NAMES[runGroup]+runDistSuffix:(sport==='swimming'?swimPrefix+swimDistLabel:`${bikeDist} km`);
+  const paceLabel=sport==='cycling'?'均速':(sport==='running'?'移動配速':'配速');
+  const hasHidden=_hiddenStack.length>0;
+  const hasEdited=ALL_ACTS.some(a=>a._paceEdited);
+  const adm=isAdmin();
+  const toolbarHtml=adm&&(hasHidden||hasEdited)?`<div style="display:flex;gap:8px;margin-bottom:10px">${hasHidden?'<button class="btn btn-g" style="font-size:11px;padding:4px 10px" onclick="undoHide()">↩️ 復原上一筆隱藏</button>':''}${hasEdited?'<button class="btn btn-g" style="font-size:11px;padding:4px 10px" onclick="resetAllPaces()">↩️ 復原所有配速</button>':''}</div>`:'';
+
+  if(isDualPace){
+    // Dual-pace table: no duration, two pace columns, all manual
+    tCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">📋 ${groupLabel} 訓練明細</h3>${toolbarHtml}
+    <div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>${dualLabels[0]}</th><th>${dualLabels[1]}</th><th>體感溫度</th><th>RPE</th>${adm?'<th>操作</th>':''}</tr></thead>
+    <tbody>${data.slice().reverse().map(a=>{
+      const rpeColor=a.rpe>=8?'#ef4444':a.rpe>=6?'#f59e0b':'#22c55e';
+      const p1Fmt=a._pace1?fmtPace('running',a._pace1):'<span style="color:#475569">未填</span>';
+      const p2Fmt=a._pace2?fmtPace('running',a._pace2):'<span style="color:#475569">未填</span>';
+      const hasDual=a._pace1||a._pace2;
+      const resetBtn=hasDual?`<button class="btn btn-g" style="font-size:10px;padding:2px 6px;margin-right:4px;color:#3b82f6" onclick="resetDualPace('${a.id}')" title="清除配速">↩️</button>`:'';
+      const p1Click=adm?`cursor:pointer" onclick="editDualPace('${a.id}',1)" title="點擊編輯`:'';
+      const p2Click=adm?`cursor:pointer" onclick="editDualPace('${a.id}',2)" title="點擊編輯`:'';
+      return`<tr><td>${a.date}</td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</td><td>${a.distance} km</td><td style="font-weight:600;color:#8b5cf6;font-family:monospace;${p1Click}">${p1Fmt}</td><td style="font-weight:600;color:#f59e0b;font-family:monospace;${p2Click}">${p2Fmt}</td><td style="font-size:13px;color:#94a3b8">${a.temperature!=null?a.temperature+'°C':'--'}</td><td>${a.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${a.rpe}/10</span>`:'--'}</td>${adm?`<td style="white-space:nowrap">${resetBtn}<button class="btn btn-g" style="font-size:10px;padding:2px 6px;color:#ef4444" onclick="hideFromCompare('${a.id}')" title="隱藏此筆">✕</button></td>`:''}</tr>`}).join('')}</tbody></table></div>`;
+  }else{
+    const isCycle=sport==='cycling';
+    const isSwim=sport==='swimming';
+    tCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">📋 ${groupLabel} 訓練明細</h3>${toolbarHtml}
+    <div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>時間</th><th>${paceLabel}</th>${isCycle?'<th>平均功率</th>':''}${isSwimOverview?'<th>裝備</th>':''}${isSwim?'':'<th>體感溫度</th>'}<th>RPE</th>${adm?'<th>操作</th>':''}</tr></thead>
+    <tbody>${data.slice().reverse().map(a=>{
+      const rpeColor=a.rpe>=8?'#ef4444':a.rpe>=6?'#f59e0b':'#22c55e';
+      const pace=useMoving&&a.movingPace?a.movingPace:a.avgPace;
+      const editedMark=a._paceEdited?'<span style="color:#f59e0b;font-size:10px" title="已手動修改"> ✏️</span>':'';
+      const resetBtn=a._paceEdited?`<button class="btn btn-g" style="font-size:10px;padding:2px 6px;margin-right:4px;color:#3b82f6" onclick="resetPace('${a.id}')" title="復原配速">↩️</button>`:'';
+      const powerCell=isCycle?(a.avgPower?`<td style="font-family:monospace;font-weight:600;color:${COLORS.cycling}">${a.avgPower} W</td>`:'<td style="color:#475569;font-size:12px">--</td>'):'';
+      const gearCell=isSwimOverview?(()=>{const g=detectSwimGear(a);return`<td><span style="color:${SWIM_GEAR_COLORS[g]};font-size:12px;font-weight:600">${SWIM_GEAR_NAMES[g]}</span></td>`})():'';
+      const tempCell=isSwim?'':`<td style="font-size:13px;color:#94a3b8">${a.temperature!=null?a.temperature+'°C':'--'}</td>`;
+      return`<tr><td>${a.date}</td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</td><td>${a.distance} km</td><td style="font-family:monospace">${fmtDur(a.duration)}</td><td style="font-weight:600;color:${COLORS[a.type]};font-family:monospace">${fmtPace(a.type,pace)}${editedMark}</td>${powerCell}${gearCell}${tempCell}<td>${a.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${a.rpe}/10</span>`:'--'}</td>${adm?`<td style="white-space:nowrap">${resetBtn}<button class="btn btn-g" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editMovingPace('${a.id}')" title="修改配速">✏️</button><button class="btn btn-g" style="font-size:10px;padding:2px 6px;color:#ef4444" onclick="hideFromCompare('${a.id}')" title="隱藏此筆">✕</button></td>`:''}</tr>`}).join('')}</tbody></table></div>`;
+  }
+  c.appendChild(tCard);
+  c.appendChild(chartRow);
+}
+
+// ═══════════════════════════════════════════════
+// PAGE: RACE PREDICTION
+// ═══════════════════════════════════════════════
+let predState={trendTarget:'半馬',trendStart:null,trendEnd:null};
+
+function tempAdjustVDOT(rawVdot, temp){
+  // 溫度修正：5~15°C 理想區間不修正
+  // >15°C 每升 1°C 慢約 0.4%，<5°C 每降 1°C 慢約 0.2%
+  if(temp==null||(temp>=5&&temp<=15)) return rawVdot;
+  if(temp>15){
+    const penalty=1-(temp-15)*0.004;
+    return rawVdot/penalty;
+  }
+  // temp < 5
+  const penalty=1-(5-temp)*0.002;
+  return rawVdot/penalty;
+}
+
+function renderPredict(){
+  const c=clearEl('page-predict');
+  const TARGETS=[{name:'5K',dist:5},{name:'10K',dist:10},{name:'半馬',dist:21.0975},{name:'全馬',dist:42.195}];
+
+  // 所有跑步比賽（不含三鐵）
+  const allRaces=ALL_ACTS.filter(a=>a.isRace&&a.type==='running'&&!/三鐵|鐵人|triathlon/i.test(a.name));
+
+  // 上半部：固定用最近半年的比賽
+  const sixMonthAgo=new Date(TODAY);sixMonthAgo.setMonth(sixMonthAgo.getMonth()-6);
+  const cutoff=sixMonthAgo.toISOString().slice(0,10);
+  const recentRaces=allRaces.filter(a=>a.date>=cutoff).sort((a,b)=>b.date.localeCompare(a.date));
+
+  // 計算每場比賽的溫度修正 VDOT
+  const raceVdots=recentRaces.map(r=>{
+    const raw=calcVDOT(r.distance,r.duration);
+    const adj=tempAdjustVDOT(raw,r.temperature);
+    return{race:r,rawVdot:raw,adjVdot:adj,temp:r.temperature};
+  });
+  const bestAdj=raceVdots.length?Math.max(...raceVdots.map(v=>v.adjVdot)):0;
+  const avgAdj=raceVdots.length?raceVdots.reduce((s,v)=>s+v.adjVdot,0)/raceVdots.length:0;
+  const bestRace=raceVdots.find(v=>v.adjVdot===bestAdj);
+
+  // 摘要卡
+  const sumCard=el('div',{class:'card'});
+  sumCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:14px">🎯 比賽實力分析（溫度修正 VDOT）</h3>
+  <div style="font-size:12px;color:#475569;margin-bottom:12px">基於最近半年比賽（${cutoff} 起），5~15°C 不修正，>15°C 每升 1°C +0.4%，<5°C 每降 1°C +0.2%。共 ${recentRaces.length} 場比賽</div>
+  ${raceVdots.length?`<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:12px">
+    <div style="text-align:center"><div style="font-size:11px;color:#64748b">最佳修正 VDOT</div><div style="font-size:28px;font-weight:700;color:#22c55e">${bestAdj.toFixed(1)}</div><div style="font-size:11px;color:#475569">${bestRace?bestRace.race.name+' ('+bestRace.race.date+')':''}</div></div>
+    <div style="text-align:center"><div style="font-size:11px;color:#64748b">平均修正 VDOT</div><div style="font-size:28px;font-weight:700;color:#3b82f6">${avgAdj.toFixed(1)}</div></div>
+  </div>`:'<div style="padding:12px;color:#475569">最近半年內沒有比賽紀錄</div>'}`;
+  c.appendChild(sumCard);
+
+  // 預測表：最佳狀態 vs 平均水準
+  if(raceVdots.length){
+    const predCard=el('div',{class:'card'});
+    let html=`<h3 style="font-size:15px;font-weight:600;margin-bottom:14px">🏁 預估完賽時間</h3>
+    <table><thead><tr><th>賽事</th><th colspan="2">最佳狀態 (VDOT ${bestAdj.toFixed(1)})</th><th colspan="2">平均水準 (VDOT ${avgAdj.toFixed(1)})</th></tr>
+    <tr style="font-size:11px;color:#64748b"><th></th><th>Riegel</th><th>VDOT</th><th>Riegel</th><th>VDOT</th></tr></thead><tbody>`;
+    const bRef=bestRace.race;
+    const aRef=raceVdots.reduce((best,v)=>{const diff=Math.abs(v.adjVdot-avgAdj);return diff<best.diff?{race:v.race,diff}:best},{race:bRef,diff:999}).race;
+    TARGETS.forEach(t=>{
+      const rBest=riegelPredict(bRef.distance,bRef.duration,t.dist);
+      const vBest=vdotPredict(bestAdj,t.dist*1000);
+      const rAvg=riegelPredict(aRef.distance,aRef.duration,t.dist);
+      const vAvg=vdotPredict(avgAdj,t.dist*1000);
+      html+=`<tr><td style="font-weight:600;font-size:16px">${t.name}<div style="font-size:11px;color:#475569">${t.dist} km</div></td>
+      <td style="font-family:monospace;font-size:14px;color:#22c55e">${fmtDur(Math.round(rBest))}</td>
+      <td style="font-family:monospace;font-size:14px;color:#22c55e">${fmtDur(Math.round(vBest))}</td>
+      <td style="font-family:monospace;font-size:14px;color:#3b82f6">${fmtDur(Math.round(rAvg))}</td>
+      <td style="font-family:monospace;font-size:14px;color:#3b82f6">${fmtDur(Math.round(vAvg))}</td></tr>`;
+    });
+    html+=`</tbody></table>
+    <div style="margin-top:12px;font-size:11px;color:#475569;line-height:1.8">
+    <span style="color:#22c55e">■</span> <b>最佳狀態：</b>基於最近半年修正後最高 VDOT 的比賽推算<br/>
+    <span style="color:#3b82f6">■</span> <b>平均水準：</b>基於最近半年所有比賽修正 VDOT 平均值推算<br/>
+    <b>Riegel：</b>T₂ = T₁ × (D₂/D₁)^1.06<br/>
+    <b>VDOT：</b>Jack Daniels 跑步能力指標</div>`;
+    predCard.innerHTML=html;
+    c.appendChild(predCard);
+  }
+
+  // Race VDOT table — 列出所有比賽，新的在上面
+  const allRaceVdots=allRaces.slice().sort((a,b)=>b.date.localeCompare(a.date)).map(r=>{
+    const raw=calcVDOT(r.distance,r.duration);
+    const adj=tempAdjustVDOT(raw,r.temperature);
+    return{race:r,rawVdot:raw,adjVdot:adj,temp:r.temperature};
+  });
+  const vCard=el('div',{class:'card'});
+  vCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">🏅 歷次比賽 VDOT 值（含體感溫度修正）</h3>
+  ${allRaceVdots.length===0?'<div style="padding:20px;color:#475569;text-align:center">沒有比賽紀錄</div>':
+  `<div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>比賽</th><th>距離</th><th>完賽時間</th><th>配速</th><th>體感溫度</th><th>原始 VDOT</th><th>修正 VDOT</th></tr></thead><tbody>
+  ${allRaceVdots.map(v=>`<tr><td>${v.race.date}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.race.name}</td><td>${v.race.distance} km</td><td style="font-family:monospace">${fmtDur(v.race.duration)}</td><td style="font-family:monospace;color:${COLORS.running}">${fmtPace('running',v.race.avgPace)}</td><td style="font-size:13px;color:#94a3b8">${v.temp!=null?v.temp+'°C':'--'}</td><td style="font-family:monospace">${v.rawVdot.toFixed(1)}</td><td style="font-weight:700;color:#3b82f6;font-family:monospace">${v.adjVdot.toFixed(1)}</td></tr>`).join('')}</tbody></table></div>`}`;
+  c.appendChild(vCard);
+
+  // ── 下半部：走勢圖 + 獨立日期控制 ──
+  const trendSection=el('div',{class:'card'});
+  trendSection.innerHTML='<h3 style="font-size:15px;font-weight:600;margin-bottom:14px">📈 預測完賽時間長期趨勢（滾動半年修正 VDOT）</h3><div style="font-size:12px;color:#475569;margin-bottom:12px">每個點基於該場比賽往前推半年內的所有比賽，計算平均修正 VDOT 後預測</div>';
+
+  // Local date controls for trend chart
+  const dateRow=el('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginBottom:'14px'}});
+  const predStartInp=el('input',{type:'date',class:'inp',id:'predTrendStart'});
+  const predEndInp=el('input',{type:'date',class:'inp',id:'predTrendEnd'});
+  // Default: 2 years
+  const twoYearAgo=new Date(TODAY);twoYearAgo.setFullYear(twoYearAgo.getFullYear()-2);
+  predStartInp.value=predState.trendStart||twoYearAgo.toISOString().slice(0,10);
+  predEndInp.value=predState.trendEnd||TODAY;
+  const refreshTrend=()=>{predState.trendStart=predStartInp.value;predState.trendEnd=predEndInp.value;renderPredTrend(allRaces,TARGETS)};
+  predStartInp.addEventListener('change',refreshTrend);
+  predEndInp.addEventListener('change',refreshTrend);
+  dateRow.appendChild(predStartInp);
+  dateRow.appendChild(el('span',{style:{color:'#475569'}},'→'));
+  dateRow.appendChild(predEndInp);
+  [['半年',182],['1年',365],['2年',730],['全部',9999]].forEach(([lb,days])=>{
+    dateRow.appendChild(el('button',{class:'btn btn-g',onClick:()=>{
+      if(days===9999&&allRaces.length){predStartInp.value=allRaces.reduce((m,r)=>r.date<m?r.date:m,allRaces[0].date)}
+      else{const d=new Date(TODAY);d.setDate(d.getDate()-days);predStartInp.value=d.toISOString().slice(0,10)}
+      predEndInp.value=TODAY;refreshTrend();
+    }},lb));
+  });
+  trendSection.appendChild(dateRow);
+
+  // Target buttons (5K, 10K, etc.)
+  const tBar=el('div',{style:{display:'flex',gap:'8px',marginBottom:'14px'}});
+  TARGETS.forEach(t=>{
+    tBar.appendChild(el('button',{class:'btn '+(predState.trendTarget===t.name?'btn-p':'btn-g'),onClick:()=>{predState.trendTarget=t.name;tBar.querySelectorAll('.btn').forEach((b,j)=>b.className='btn '+(TARGETS[j].name===t.name?'btn-p':'btn-g'));renderPredTrend(allRaces,TARGETS)}},t.name));
+  });
+  trendSection.appendChild(tBar);
+
+  const tBox=el('div',{class:'chart-box',id:'predTrendBox'});const tCvs=el('canvas',{id:'predTrendCvs'});tBox.appendChild(tCvs);trendSection.appendChild(tBox);
+  c.appendChild(trendSection);
+  renderPredTrend(allRaces,TARGETS);
+}
+
+function renderPredTrend(allRaces,TARGETS){
+  const tgt=TARGETS.find(t=>t.name===predState.trendTarget);if(!tgt)return;
+  const tStart=predState.trendStart||(()=>{const d=new Date(TODAY);d.setFullYear(d.getFullYear()-2);return d.toISOString().slice(0,10)})();
+  const tEnd=predState.trendEnd||TODAY;
+
+  // 走勢圖範圍內的比賽
+  const rangeRaces=allRaces.filter(r=>r.date>=tStart&&r.date<=tEnd).sort((a,b)=>a.date.localeCompare(b.date));
+
+  // 對每場比賽，取該場往前推半年的所有比賽算平均修正 VDOT，再預測
+  const tData=rangeRaces.map(r=>{
+    const rDate=new Date(r.date);
+    const windowStart=new Date(rDate);windowStart.setMonth(windowStart.getMonth()-6);
+    const wCutoff=windowStart.toISOString().slice(0,10);
+    const windowRaces=allRaces.filter(x=>x.date>=wCutoff&&x.date<=r.date);
+    if(!windowRaces.length) return null;
+    const vdots=windowRaces.map(x=>{const raw=calcVDOT(x.distance,x.duration);return tempAdjustVDOT(raw,x.temperature)});
+    const avgV=vdots.reduce((s,v)=>s+v,0)/vdots.length;
+    const pred=Math.round(vdotPredict(avgV,tgt.dist*1000));
+    return{date:r.date,avgVdot:+avgV.toFixed(1),pred,name:r.name,nRaces:windowRaces.length};
+  }).filter(Boolean);
+
+  destroyChart('predTrend');
+  const cvs=$('predTrendCvs');if(!cvs)return;
+  if(tData.length<1){$('predTrendBox').innerHTML='<div style="text-align:center;padding:30px;color:#475569">此區間內沒有比賽紀錄</div>';return}
+  if(!cvs.parentNode.contains(cvs)){$('predTrendBox').innerHTML='';$('predTrendBox').appendChild(cvs)}
+
+  charts.predTrend=new Chart(cvs,{type:'line',data:{
+    datasets:[{label:`${predState.trendTarget}預估`,data:tData.map(d=>({x:d.date,y:d.pred})),borderColor:'#f43f5e',borderWidth:2.5,pointRadius:5,pointBackgroundColor:'#f43f5e',tension:.3}]
+  },options:{responsive:true,maintainAspectRatio:false,
+    scales:{x:{type:'time',time:{unit:'month',displayFormats:{month:'yy/MM'}}},y:{reverse:true,ticks:{callback:v=>fmtDur(v)},title:{display:true,text:'完賽時間'}}},
+    plugins:{tooltip:{callbacks:{label:ctx=>`預估: ${fmtDur(ctx.parsed.y)}`,title:items=>{const i=items[0]?.dataIndex;return i!=null?`${tData[i].date} · 半年平均 VDOT ${tData[i].avgVdot} · 基於 ${tData[i].nRaces} 場比賽`:''}}}}
+  }});
+}
+
+// ═══════════════════════════════════════════════
+// PAGE: MONTHLY VOLUME
+// ═══════════════════════════════════════════════
+let monthMetric='distance';
+
+function renderMonthly(){
+  const c=clearEl('page-monthly');
+  const acts=getFiltered();
+  const months={};
+  // 單一 case:2026-03-29 普悠瑪 515 三鐵(activityId 22332895318)在 cache 裡是單筆 type=running、distance=54.68km。
+  // 月里程拆成三段(距離由 Garmin Connect 行事曆比對推得;T1+T2 過渡區不計入任何一項)。
+  const TRI_SPLIT_OVERRIDES={
+    22332895318:{swim:1.49,bike:41.77,run:10.12,swimSec:2058,bikeSec:4543,runSec:3115}
+  };
+  acts.forEach(a=>{
+    const m=a.date.slice(0,7);
+    if(!months[m])months[m]={month:m,running:0,cycling:0,swimming:0,runH:0,bikeH:0,swimH:0,runN:0,bikeN:0,swimN:0};
+    const tri=TRI_SPLIT_OVERRIDES[a.activityId];
+    if(tri){
+      months[m].swimming+=tri.swim;months[m].swimH+=tri.swimSec/3600;months[m].swimN++;
+      months[m].cycling+=tri.bike;months[m].bikeH+=tri.bikeSec/3600;months[m].bikeN++;
+      months[m].running+=tri.run;months[m].runH+=tri.runSec/3600;months[m].runN++;
+      return;
+    }
+    months[m][a.type]+=a.distance;
+    if(a.type==='running'){months[m].runH+=a.duration/3600;months[m].runN++}
+    if(a.type==='cycling'){months[m].bikeH+=a.duration/3600;months[m].bikeN++}
+    if(a.type==='swimming'){months[m].swimH+=a.duration/3600;months[m].swimN++}
+  });
+  const data=Object.values(months).sort((a,b)=>a.month.localeCompare(b.month));
+  const totalR=data.reduce((s,d)=>s+d.running,0),totalB=data.reduce((s,d)=>s+d.cycling,0),totalS=data.reduce((s,d)=>s+d.swimming,0);
+
+  // Stats
+  const statsRow=el('div',{class:'row'});
+  [['跑步總量',`${totalR.toFixed(0)} km`,`${data.reduce((s,d)=>s+d.runN,0)} 次`,COLORS.running,'🏃'],
+   ['騎車總量',`${totalB.toFixed(0)} km`,`${data.reduce((s,d)=>s+d.bikeN,0)} 次`,COLORS.cycling,'🚴'],
+   ['游泳總量',`${totalS.toFixed(1)} km`,`${data.reduce((s,d)=>s+d.swimN,0)} 次`,COLORS.swimming,'🏊']
+  ].forEach(([lb,vl,sb,cl,ic])=>{
+    const s=el('div',{class:'card stat'});
+    s.innerHTML=`<div class="icon">${ic}</div><div class="label">${lb}</div><div class="val" style="color:${cl}">${vl}</div><div class="sub">${sb}</div>`;
+    statsRow.appendChild(s);
+  });
+  c.appendChild(statsRow);
+
+  // Metric buttons
+  const mBar=el('div',{style:{display:'flex',gap:'8px',marginBottom:'14px'}});
+  [['distance','距離 (km)'],['time','時數 (hr)'],['count','次數']].forEach(([k,l])=>{
+    mBar.appendChild(el('button',{class:'btn '+(monthMetric===k?'btn-p':'btn-g'),onClick:()=>{monthMetric=k;renderMonthly()}},l));
+  });
+  c.appendChild(mBar);
+
+  // Main chart
+  const mCard=el('div',{class:'card'});
+  const mLabel=monthMetric==='distance'?'里程':monthMetric==='time'?'訓練時數':'訓練次數';
+  mCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:14px">📊 每月${mLabel}</h3>`;
+  const mBox=el('div',{class:'chart-box',style:{height:'380px'}});const mCvs=el('canvas');mBox.appendChild(mCvs);mCard.appendChild(mBox);c.appendChild(mCard);
+
+  const getDs=(sport,key,color)=>({label:SPORT_NAMES[sport],data:data.map(d=>+(d[key]).toFixed(1)),backgroundColor:color+'cc',borderRadius:4,borderSkipped:false});
+  const dsMap={
+    distance:[getDs('running','running',COLORS.running),getDs('cycling','cycling',COLORS.cycling),getDs('swimming','swimming',COLORS.swimming)],
+    time:[getDs('running','runH',COLORS.running),getDs('cycling','bikeH',COLORS.cycling),getDs('swimming','swimH',COLORS.swimming)],
+    count:[getDs('running','runN',COLORS.running),getDs('cycling','bikeN',COLORS.cycling),getDs('swimming','swimN',COLORS.swimming)]
+  };
+
+  destroyChart('monthly');
+  charts.monthly=new Chart(mCvs,{type:'bar',data:{
+    labels:data.map(d=>d.month.slice(2)),datasets:dsMap[monthMetric]
+  },options:{responsive:true,maintainAspectRatio:false,
+    scales:{x:{stacked:true,ticks:{maxTicksLimit:24}},y:{stacked:true}},
+    plugins:{legend:{position:'top'}}
+  }});
+
+  // Individual sport charts
+  const indRow=el('div',{class:'row'});
+  ['running','cycling','swimming'].forEach(sp=>{
+    const key=sp;const iCard=el('div',{class:'card',style:{flex:'1 1 320px'}});
+    iCard.innerHTML=`<h3 style="font-size:14px;font-weight:600;margin-bottom:10px">${ICONS[sp]} ${SPORT_NAMES[sp]}每月里程</h3>`;
+    const iBox=el('div',{style:{position:'relative',height:'200px'}});const iCvs=el('canvas');iBox.appendChild(iCvs);iCard.appendChild(iBox);indRow.appendChild(iCard);
+    destroyChart('monthly_'+sp);
+    charts['monthly_'+sp]=new Chart(iCvs,{type:'bar',data:{
+      labels:data.map(d=>d.month.slice(2)),datasets:[{data:data.map(d=>+d[key].toFixed(1)),backgroundColor:COLORS[sp]+'cc',borderRadius:4}]
+    },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{maxTicksLimit:12}},y:{}}}});
+  });
+  c.appendChild(indRow);
+}
+
+// ═══════════════════════════════════════════════
+// PAGE: RACE HISTORY
+// ═══════════════════════════════════════════════
+let showCandidates=false;
+
+function renderRaces(){
+  const c=clearEl('page-races');
+  const races=ALL_ACTS.filter(a=>a.isRace).sort((a,b)=>b.date.localeCompare(a.date));
+
+  // 三鐵判斷函式（獨立的 tri 或 三鐵/鐵人/triathlon）
+  const isTri=r=>/三鐵|鐵人|triathlon/i.test(r.name);
+
+  // Race pace trend charts
+  // 第一列：全馬, 半馬；第二列：10K, 5K（順序對齊下方表格）
+  const row1Cats=[
+    {name:'全程馬拉松',min:25,max:45},
+    {name:'半程馬拉松',min:12,max:25}
+  ];
+  const row2Cats=[
+    {name:'10K',min:6,max:12},
+    {name:'5K',min:0,max:6}
+  ];
+  const sortedRaces=races.slice().sort((a,b)=>a.date.localeCompare(b.date));
+
+  function renderTrendRow(cats){
+    const row=el('div',{class:'row'});
+    let hasChart=false;
+    cats.forEach(dc=>{
+      const catRaces=sortedRaces.filter(r=>r.type==='running'&&r.distance>dc.min&&r.distance<=dc.max&&!isTri(r));
+      if(catRaces.length<1)return;
+      hasChart=true;
+      const tCard=el('div',{class:'card',style:{flex:'1 1 0',minWidth:'0'}});
+      tCard.innerHTML=`<h3 style="font-size:14px;font-weight:600;margin-bottom:10px">📈 ${dc.name} 配速趨勢</h3>`;
+      const tBox=el('div',{style:{position:'relative',height:'220px'}});const tCvs=el('canvas');tBox.appendChild(tCvs);tCard.appendChild(tBox);row.appendChild(tCard);
+      const chartKey='raceTrend_'+dc.name;
+      destroyChart(chartKey);
+
+      const vdotData=catRaces.map(r=>{const raw=calcVDOT(r.distance,r.duration);return+tempAdjustVDOT(raw,r.temperature).toFixed(1)});
+
+      const datasets=[
+        {label:'配速',data:catRaces.map(r=>({x:r.date,y:r.avgPace})),borderColor:'#f43f5e',borderWidth:2.5,pointRadius:5,pointBackgroundColor:'#f43f5e',tension:.3,yAxisID:'y'},
+        {label:'修正 VDOT',data:catRaces.map((r,i)=>({x:r.date,y:vdotData[i]})),borderColor:'#3b82f6',borderWidth:2,pointRadius:4,pointBackgroundColor:'#3b82f6',borderDash:[5,3],tension:.3,yAxisID:'y1'},
+        {label:'體感溫度',data:catRaces.map(r=>({x:r.date,y:r.temperature!=null?r.temperature:null})),borderColor:'#f59e0b',borderWidth:1.8,pointRadius:3,pointBackgroundColor:'#f59e0b',borderDash:[3,3],tension:.3,spanGaps:true,yAxisID:'y2'}
+      ];
+
+      const scales={
+        x:{type:'time',time:{unit:'month',displayFormats:{month:'yy/MM'}},ticks:{maxTicksLimit:8}},
+        y:{position:'left',reverse:true,ticks:{callback:v=>fmtPace('running',v)},title:{display:true,text:'配速'}},
+        y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'修正 VDOT',color:'#3b82f6'},ticks:{color:'#3b82f6'}},
+        y2:{position:'right',display:false,grid:{drawOnChartArea:false}}
+      };
+
+      charts[chartKey]=new Chart(tCvs,{type:'line',data:{
+        datasets
+      },options:{responsive:true,maintainAspectRatio:false,
+        scales,
+        plugins:{tooltip:{callbacks:{label:ctx=>{
+          if(ctx.dataset.yAxisID==='y1') return '修正 VDOT: '+ctx.parsed.y;
+          if(ctx.dataset.yAxisID==='y2') return '體感溫度: '+(ctx.parsed.y!=null?ctx.parsed.y+'°C':'--');
+          return '配速: '+fmtPace('running',ctx.parsed.y);
+        },title:items=>{const i=items[0]?.dataIndex;return i!=null?`${catRaces[i].date} · ${catRaces[i].name}`:''}}}}
+      }});
+    });
+    if(hasChart)c.appendChild(row);
+  }
+  renderTrendRow(row1Cats);
+  renderTrendRow(row2Cats);
+
+  // Group races by category
+  const groups={};
+  races.forEach(r=>{
+    let cat='其他';
+    if(r.type==='swimming'||r.type==='cycling')return;
+    if(isTri(r)){cat='三鐵';if(!groups[cat])groups[cat]=[];groups[cat].push(r);return}
+    if(r.distance<=6)cat='5K';
+    else if(r.distance<=12)cat='10K';
+    else if(r.distance<=25)cat='半程馬拉松';
+    else if(r.distance<=45)cat='全程馬拉松';
+    else cat='超馬/其他';
+    if(!groups[cat])groups[cat]=[];
+    groups[cat].push(r);
+  });
+
+  // 表格固定順序：全馬 → 半馬 → 10K → 短距離(原 5K) → 三鐵 → 其他
+  const tableOrder=['全程馬拉松','半程馬拉松','10K','5K','三鐵','超馬/其他','其他'];
+  const titleMap={'5K':'短距離'};
+  tableOrder.forEach(cat=>{
+    const list=groups[cat];
+    if(!list||!list.length)return;
+    const displayCat=titleMap[cat]||cat;
+    const gCard=el('div',{class:'card'});
+    const isTriCat=cat==='三鐵';
+    const fmtSplit=s=>s?fmtDur(s):'<span style="color:#475569">--</span>';
+    if(isTriCat){
+      gCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">🏆 ${displayCat}</h3>
+      <table><thead><tr><th>日期</th><th>賽事名稱</th><th>距離</th><th>完賽時間</th><th>🏊 游泳</th><th>T1</th><th>🚴 騎車</th><th>T2</th><th>🏃 跑步</th><th>體感溫度</th>${isAdmin()?'<th>操作</th>':''}</tr></thead>
+      <tbody>${list.map(r=>{
+        const sp=r.triSplits||{};
+        return`<tr><td>${r.date}</td><td>${r.name}</td><td>${r.distance} km</td>
+        <td style="font-family:monospace;font-weight:600;font-size:15px">${fmtDur(r.duration)}</td>
+        <td style="font-family:monospace;color:${COLORS.swimming}">${fmtSplit(sp.swim)}</td>
+        <td style="font-family:monospace;color:#94a3b8">${fmtSplit(sp.T1)}</td>
+        <td style="font-family:monospace;color:${COLORS.cycling}">${fmtSplit(sp.bike)}</td>
+        <td style="font-family:monospace;color:#94a3b8">${fmtSplit(sp.T2)}</td>
+        <td style="font-family:monospace;color:${COLORS.running}">${fmtSplit(sp.run)}</td>
+        <td style="font-size:13px;color:#94a3b8">${r.temperature!=null?r.temperature+'°C':'--'}</td>
+        ${isAdmin()?`<td><button class="btn btn-g" style="font-size:11px;padding:3px 8px;color:#ef4444" onclick="toggleRace('${r.id}')">移除標記</button></td>`:''}</tr>`}).join('')}</tbody></table>`;
+    }else{
+      gCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">🏆 ${displayCat}</h3>
+      <table><thead><tr><th>日期</th><th>賽事名稱</th><th>距離</th><th>完賽時間</th><th>配速</th><th>體感溫度</th><th>RPE</th><th>VDOT</th><th>修正 VDOT</th>${isAdmin()?'<th>操作</th>':''}</tr></thead>
+      <tbody>${list.map(r=>{
+        const rawVdot=r.type==='running'&&!isTri(r)?calcVDOT(r.distance,r.duration):null;
+        const adjVdot=rawVdot!=null?tempAdjustVDOT(rawVdot,r.temperature):null;
+        const rpeColor=r.rpe>=8?'#ef4444':r.rpe>=6?'#f59e0b':'#22c55e';
+        return`<tr><td>${r.date}</td><td>${r.name}</td><td>${r.distance} km</td>
+        <td style="font-family:monospace;font-weight:600;font-size:15px">${fmtDur(r.duration)}</td>
+        <td style="font-family:monospace;color:${COLORS[r.type]}">${fmtPace(r.type,r.avgPace)}</td>
+        <td style="font-size:13px;color:#94a3b8">${r.temperature!=null?r.temperature+'°C':'--'}</td>
+        <td>${r.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${r.rpe}/10</span>`:'--'}</td>
+        <td style="font-family:monospace">${rawVdot!=null?rawVdot.toFixed(1):'--'}</td>
+        <td style="font-weight:700;color:#3b82f6;font-family:monospace">${adjVdot!=null?adjVdot.toFixed(1):'--'}</td>
+        ${isAdmin()?`<td><button class="btn btn-g" style="font-size:11px;padding:3px 8px;color:#ef4444" onclick="toggleRace('${r.id}')">移除標記</button></td>`:''}</tr>`}).join('')}</tbody></table>`;
+    }
+    c.appendChild(gCard);
+  });
+
+  if(!races.length){
+    c.appendChild(el('div',{class:'card',style:{textAlign:'center',padding:'30px',color:'#475569'}},'此時間區段內沒有標記為比賽的活動。點擊下方按鈕來標記你的比賽紀錄。'));
+  }
+
+  // Candidate section (admin only)
+  if(isAdmin()){
+    const cCard=el('div',{class:'card'});
+    const hdr=el('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'12px'}});
+    hdr.appendChild(el('h3',{style:{fontSize:'15px',fontWeight:'600'}},'🔍 標記比賽 — 從活動中選擇'));
+    hdr.appendChild(el('button',{class:'btn '+(showCandidates?'btn-p':'btn-g'),onClick:()=>{showCandidates=!showCandidates;renderRaces()}},showCandidates?'隱藏候選':'顯示候選活動'));
+    cCard.appendChild(hdr);
+    cCard.appendChild(el('p',{style:{fontSize:'12px',color:'#475569',marginBottom:'12px'}},'系統列出距離 ≥5km 的活動，你可以手動標記為比賽。'));
+
+    if(showCandidates){
+      const cands=getFiltered().filter(a=>!a.isRace&&a.type==='running'&&a.distance>=5).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
+      if(!cands.length)cCard.appendChild(el('div',{style:{padding:'20px',color:'#475569',textAlign:'center'}},'沒有找到候選活動'));
+      else{
+        const tbl=el('div',{style:{maxHeight:'400px',overflowY:'auto'}});
+        tbl.innerHTML=`<table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>時間</th><th>配速</th><th>操作</th></tr></thead>
+        <tbody>${cands.map(a=>`<tr><td>${a.date}</td><td>${a.name}</td><td>${a.distance} km</td><td style="font-family:monospace">${fmtDur(a.duration)}</td><td style="font-family:monospace">${fmtPace(a.type,a.avgPace)}</td><td><button class="btn btn-p" style="font-size:11px;padding:3px 10px" onclick="toggleRace('${a.id}')">🏅 標記為比賽</button></td></tr>`).join('')}</tbody></table>`;
+        cCard.appendChild(tbl);
+      }
+    }
+    c.appendChild(cCard);
+  }
+}
+
+function toggleRace(id){
+  if(!isAdmin())return;
+  const a=ALL_ACTS.find(x=>x.id===id);
+  if(a){a.isRace=!a.isRace;a.trainingType=a.isRace?'race':detectType(a)}
+  renderPage();
+}
+
+// ═══════════════════════════════════════════════
+// PAGE: IMPORT
+// ═══════════════════════════════════════════════
+function renderImport(){
+  const c=clearEl('page-import');
+  c.innerHTML=`
+  <div class="card" id="dropZone" style="text-align:center;padding:40px;border:2px dashed #334155;cursor:pointer">
+    <div style="font-size:48px;margin-bottom:12px">📂</div>
+    <p style="font-size:16px;font-weight:600;margin-bottom:6px">拖放 Garmin CSV 到這裡</p>
+    <p style="font-size:12px;color:#475569;margin-bottom:14px">支援 Garmin Connect 匯出的 CSV 格式</p>
+    <label class="btn btn-p" style="padding:10px 24px;display:inline-block">選擇檔案<input type="file" accept=".csv" style="display:none" id="fileInput"/></label>
+    <p id="importStatus" style="margin-top:14px;font-size:13px"></p>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:10px">📋 匯出步驟</h3>
+    <ol style="font-size:13px;color:#94a3b8;line-height:2.2;padding-left:20px">
+      <li>登入 <a href="https://connect.garmin.com" target="_blank">connect.garmin.com</a></li>
+      <li>左側選單 → 活動 → 所有活動</li>
+      <li>右上角「匯出 CSV」</li>
+      <li>或使用 Python 腳本 <code style="background:#0f172a;padding:2px 6px;border-radius:4px;font-size:12px">garmin_fetch_data.py</code> 自動下載</li>
+    </ol>
+    <div style="margin-top:14px;padding:14px;background:#0f172a;border-radius:10px;font-size:12px;color:#475569">
+      <b style="color:#f59e0b">💡</b> CSV 中若活動名稱含有「間歇」「Tempo」「比賽」等關鍵字，系統會自動分類。
+    </div>
+  </div>`;
+
+  const dz=$('dropZone');
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.style.borderColor='#3b82f6'});
+  dz.addEventListener('dragleave',()=>{dz.style.borderColor='#334155'});
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.style.borderColor='#334155';handleCSV(e.dataTransfer.files[0])});
+  $('fileInput').addEventListener('change',e=>handleCSV(e.target.files[0]));
+}
+
+function handleCSV(file){
+  if(!file)return;
+  $('importStatus').textContent=`正在解析 ${file.name}...`;
+  $('importStatus').style.color='#f59e0b';
+  Papa.parse(file,{header:true,skipEmptyLines:true,complete:results=>{
+    try{
+      const acts=results.data.map((row,i)=>{
+        const typeRaw=(row['Activity Type']||row['活動類型']||row.activityType||'').toLowerCase();
+        let type='running';
+        if(/cycl|bik|騎/.test(typeRaw))type='cycling';else if(/swim|游/.test(typeRaw))type='swimming';
+        const name=row['Title']||row['Activity Name']||row['名稱']||row.activityName||row['Activity Type']||'';
+        const dist=parseFloat(row['Distance']||row['距離']||row.distance||0);
+        const durStr=(row['Time']||row['Duration']||row['時間']||row.duration||'0').toString();
+        const dp=durStr.split(':').map(Number);
+        let durS=dp.length===3?dp[0]*3600+dp[1]*60+dp[2]:dp.length===2?dp[0]*60+dp[1]:dp[0]||0;
+        const avgHR=parseInt(row['Avg HR']||row['平均心率']||row.averageHR||0)||0;
+        const maxHR=parseInt(row['Max HR']||row['最大心率']||row.maxHR||0)||0;
+        const cal=parseInt(row['Calories']||row['卡路里']||row.calories||0)||0;
+        const elev=parseInt(row['Elev Gain']||row['Total Ascent']||row['爬升']||row.elevationGain||0)||0;
+        const te=parseFloat(row['Aerobic TE']||row['Training Effect']||0)||0;
+        const vo2=parseInt(row['VO2max']||row['VO2 Max']||0)||null;
+        const pace=dist>0&&durS>0?(type==='cycling'?+(dist/(durS/3600)).toFixed(1):+(durS/60/dist).toFixed(2)):0;
+        return{id:`csv-${i}`,date:(row['Date']||row['日期']||row.startTimeLocal||'').slice(0,10),
+          type,name,distance:isNaN(dist)?0:dist,duration:durS,avgHR,maxHR,calories:cal,
+          avgPace:pace,cadence:parseInt(row['Avg Run Cadence']||row['步頻']||0)||null,
+          elevGain:elev,trainingEffect:te||+(2+Math.random()*2).toFixed(1),vo2max:vo2,
+          trainingType:null,isRace:false,rpe:avgHR?Math.min(10,Math.max(1,Math.round((avgHR-100)/10))):null};
+      }).filter(a=>a.date&&a.distance>0);
+      acts.forEach(a=>{a.trainingType=detectType(a);if(a.trainingType==='race')a.isRace=true});
+      if(acts.length>0){
+        ALL_ACTS=acts.sort((a,b)=>b.date.localeCompare(a.date));IS_DEMO=false;
+        $('startDate').value=ALL_ACTS[ALL_ACTS.length-1].date;
+        $('endDate').value=ALL_ACTS[0].date;
+        $('headerSub').textContent=`Forerunner 255 · 📊 你的真實資料 · ${ALL_ACTS.length} 筆活動`;
+        $('importStatus').textContent=`✅ 成功匯入 ${acts.length} 筆活動！`;
+        $('importStatus').style.color='#22c55e';
+        switchPage('vo2max');
+      }else{$('importStatus').textContent='⚠️ 未識別到有效活動資料';$('importStatus').style.color='#f59e0b'}
+    }catch(e){$('importStatus').textContent='❌ 解析失敗：'+e.message;$('importStatus').style.color='#ef4444'}
+  }});
+}
+
+// ═══════════════════════════════════════════════
+// RENDER DISPATCH
+// ═══════════════════════════════════════════════
+function renderPage(){
+  switch(CURRENT_PAGE){
+    case'vo2max':renderVO2max();break;
+    case'compare':renderCompare();break;
+    case'predict':renderPredict();break;
+    case'monthly':renderMonthly();break;
+    case'races':renderRaces();break;
+  }
+}
+
+// ═══════════════════════════════════════════════
+// INIT(離線備援版:fetch ./garmin_cache.json + ./user_edits.json)
+// ═══════════════════════════════════════════════
+function init(){
+  // 先用 demo 撐住 UI,避免 fetch 中畫面空白
+  ALL_ACTS=generateDemo();
+  const oneYearAgo=new Date(TODAY);oneYearAgo.setFullYear(oneYearAgo.getFullYear()-1);
+  $('startDate').value=oneYearAgo.toISOString().slice(0,10);
+  $('endDate').value=TODAY;
+  $('startDate').addEventListener('change',renderPage);
+  $('endDate').addEventListener('change',renderPage);
+  initNav();
+  $('headerSub').textContent='📂 離線備援版 · ⏳ 載入 GitHub cache...';
+
+  fetch('./garmin_cache.json',{cache:'no-store'})
+    .then(r=>{if(!r.ok)throw new Error('garmin_cache.json HTTP '+r.status);return r.json()})
+    .then(cache=>{
+      const acts=(cache.activities||[]).map((a,i)=>({
+        ...a,
+        id:'garmin-'+i,
+        trainingType:null,isRace:false,
+        rpe:a.rpe||(a.avgHR?Math.min(10,Math.max(1,Math.round((a.avgHR-100)/10))):null)
+      }));
+      acts.forEach(a=>{a.trainingType=detectType(a);if(a.trainingType==='race')a.isRace=true});
+      ALL_ACTS=acts.sort((a,b)=>b.date.localeCompare(a.date));
+      IS_DEMO=false;
+      if(ALL_ACTS.length>0){
+        $('endDate').value=TODAY;
+        $('startDate').value=oneYearAgo.toISOString().slice(0,10);
+      }
+      const ts=cache.fetched_at?new Date(cache.fetched_at).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'未知';
+      $('headerSub').innerHTML=`📂 離線備援版 · ${ALL_ACTS.length} 筆活動 · cache 抓取於 ${ts} · <a href="https://garmin-dashboard-production-d5dd.up.railway.app" style="color:#3b82f6">回 Railway 版</a>`;
+      // 載入 user_edits（讀失敗就略過,demo / 沒同步到都不致命）
+      return fetch('./user_edits.json',{cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null);
+    })
+    .then(ed=>{
+      if(ed){_userEdits=ed;applyUserEdits();}
+      renderPage();
+    })
+    .catch(err=>{
+      console.error('離線備援版載入失敗:',err);
+      $('headerSub').textContent='📂 離線備援版 · ⚠️ cache JSON 載入失敗,只能用展示模式';
+      renderPage();
+    });
+}
+
+// Check Chart.js loaded
+if(typeof Chart==='undefined'){
+  document.getElementById('app').innerHTML='<div style="color:#ef4444;padding:40px;text-align:center"><h2>⚠️ Chart.js 載入失敗</h2><p style="color:#94a3b8;margin-top:8px">請確認網路連線正常後重新整理</p></div>';
+}else{
+  init();
+}
+</script>
+</body>
+</html>

@@ -1,44 +1,43 @@
 name: Sync cache from private repo
 
-  on:
-    schedule:
-      - cron: '30 14 * * *'
-    workflow_dispatch:
+on:
+  schedule:
+    - cron: '30 14 * * *'
+  workflow_dispatch:
 
-  jobs:
-    sync:
-      runs-on: ubuntu-latest
-      permissions:
-        contents: write
-      steps:
-        - name: Checkout fallback repo
-          uses: actions/checkout@v4
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout fallback repo
+        uses: actions/checkout@v4
 
-        - name: Fetch cache JSON from private repo's cache branch
-          env:
-            GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          run: |
-            set -e
-            for f in garmin_cache.json temp_cache.json vo2max_cache.json rpe_cache.json power_cache.json
-  tri_splits_cache.json user_edits.json; do
-              echo "Fetching $f..."
-              curl -fsSL \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                -H "Accept: application/vnd.github.raw" \
-                -H "User-Agent: garmin-dashboard-fallback-sync" \
-                "https://api.github.com/repos/pc0620022002/garmin-dashboard/contents/$f?ref=cache" \
-                -o "$f"
-              echo "  $(wc -c < $f) bytes"
-            done
+      - name: Fetch cache JSON from private repo's cache branch
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -e
+          for f in garmin_cache.json temp_cache.json vo2max_cache.json rpe_cache.json power_cache.json tri_splits_cache.json user_edits.json; do
+            echo "Fetching $f..."
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.raw" \
+              -H "User-Agent: garmin-dashboard-fallback-sync" \
+              "https://api.github.com/repos/pc0620022002/garmin-dashboard/contents/$f?ref=cache" \
+              -o "$f"
+            echo "  $(wc -c < $f) bytes"
+          done
 
-        - name: Commit & push if changed
-          run: |
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -- '*.json'
-            if git diff --cached --quiet; then
-              echo "No changes to commit."
-            else
-              git commit -m "sync: cache JSON from private repo $(date -u +%Y-%m-%dT%H:%MZ)"
-              git push
-            fi
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.json'
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "sync: cache JSON from private repo $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi

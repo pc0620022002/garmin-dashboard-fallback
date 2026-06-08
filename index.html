@@ -784,7 +784,7 @@ function renderCompare(){
   if(isDualPace){
     // Dual-pace table: no duration, two pace columns, all manual
     tCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">📋 ${groupLabel} 訓練明細</h3>${toolbarHtml}
-    <div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>${dualLabels[0]}</th><th>${dualLabels[1]}</th><th>體感溫度</th><th>RPE</th>${adm?'<th>操作</th>':''}</tr></thead>
+    <div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>${dualLabels[0]}</th><th>${dualLabels[1]}</th><th>體感溫度</th><th title="完跑時刻的相對濕度(Open-Meteo,跟體感溫度同時間點)">完跑時的濕度</th><th>RPE</th>${adm?'<th>操作</th>':''}</tr></thead>
     <tbody>${data.slice().reverse().map(a=>{
       const rpeColor=a.rpe>=8?'#ef4444':a.rpe>=6?'#f59e0b':'#22c55e';
       const p1Fmt=a._pace1?fmtPace('running',a._pace1):'<span style="color:#475569">未填</span>';
@@ -793,12 +793,12 @@ function renderCompare(){
       const resetBtn=hasDual?`<button class="btn btn-g" style="font-size:10px;padding:2px 6px;margin-right:4px;color:#3b82f6" onclick="resetDualPace('${a.id}')" title="清除配速">↩️</button>`:'';
       const p1Click=adm?`cursor:pointer" onclick="editDualPace('${a.id}',1)" title="點擊編輯`:'';
       const p2Click=adm?`cursor:pointer" onclick="editDualPace('${a.id}',2)" title="點擊編輯`:'';
-      return`<tr><td>${a.date}</td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</td><td>${a.distance} km</td><td style="font-weight:600;color:#8b5cf6;font-family:monospace;${p1Click}">${p1Fmt}</td><td style="font-weight:600;color:#f59e0b;font-family:monospace;${p2Click}">${p2Fmt}</td><td style="font-size:13px;color:#94a3b8">${a.temperature!=null?a.temperature+'°C':'--'}</td><td>${a.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${a.rpe}/10</span>`:'--'}</td>${adm?`<td style="white-space:nowrap">${resetBtn}<button class="btn btn-g" style="font-size:10px;padding:2px 6px;color:#ef4444" onclick="hideFromCompare('${a.id}')" title="隱藏此筆">✕</button></td>`:''}</tr>`}).join('')}</tbody></table></div>`;
+      return`<tr><td>${a.date}</td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</td><td>${a.distance} km</td><td style="font-weight:600;color:#8b5cf6;font-family:monospace;${p1Click}">${p1Fmt}</td><td style="font-weight:600;color:#f59e0b;font-family:monospace;${p2Click}">${p2Fmt}</td><td style="font-size:13px;color:#94a3b8">${a.temperature!=null?a.temperature+'°C':'--'}</td><td style="font-size:13px;color:#94a3b8">${a.humidity!=null?a.humidity+'%':'--'}</td><td>${a.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${a.rpe}/10</span>`:'--'}</td>${adm?`<td style="white-space:nowrap">${resetBtn}<button class="btn btn-g" style="font-size:10px;padding:2px 6px;color:#ef4444" onclick="hideFromCompare('${a.id}')" title="隱藏此筆">✕</button></td>`:''}</tr>`}).join('')}</tbody></table></div>`;
   }else{
     const isCycle=sport==='cycling';
     const isSwim=sport==='swimming';
     tCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">📋 ${groupLabel} 訓練明細</h3>${toolbarHtml}
-    <div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>時間</th><th>${paceLabel}</th>${isCycle?'<th>平均功率</th>':''}${isSwimOverview?'<th>裝備</th>':''}${isSwim?'':'<th>體感溫度</th>'}<th>RPE</th>${adm?'<th>操作</th>':''}</tr></thead>
+    <div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>名稱</th><th>距離</th><th>時間</th><th>${paceLabel}</th>${isCycle?'<th>平均功率</th>':''}${isSwimOverview?'<th>裝備</th>':''}${isSwim?'':'<th>體感溫度</th>'}${isSwim?'':'<th title="完跑時刻的相對濕度(Open-Meteo,跟體感溫度同時間點)">完跑時的濕度</th>'}<th>RPE</th>${adm?'<th>操作</th>':''}</tr></thead>
     <tbody>${data.slice().reverse().map(a=>{
       const rpeColor=a.rpe>=8?'#ef4444':a.rpe>=6?'#f59e0b':'#22c55e';
       const pace=useMoving&&a.movingPace?a.movingPace:a.avgPace;
@@ -807,7 +807,8 @@ function renderCompare(){
       const powerCell=isCycle?(a.avgPower?`<td style="font-family:monospace;font-weight:600;color:${COLORS.cycling}">${a.avgPower} W</td>`:'<td style="color:#475569;font-size:12px">--</td>'):'';
       const gearCell=isSwimOverview?(()=>{const g=detectSwimGear(a);return`<td><span style="color:${SWIM_GEAR_COLORS[g]};font-size:12px;font-weight:600">${SWIM_GEAR_NAMES[g]}</span></td>`})():'';
       const tempCell=isSwim?'':`<td style="font-size:13px;color:#94a3b8">${a.temperature!=null?a.temperature+'°C':'--'}</td>`;
-      return`<tr><td>${a.date}</td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</td><td>${a.distance} km</td><td style="font-family:monospace">${fmtDur(a.duration)}</td><td style="font-weight:600;color:${COLORS[a.type]};font-family:monospace">${fmtPace(a.type,pace)}${editedMark}</td>${powerCell}${gearCell}${tempCell}<td>${a.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${a.rpe}/10</span>`:'--'}</td>${adm?`<td style="white-space:nowrap">${resetBtn}<button class="btn btn-g" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editMovingPace('${a.id}')" title="修改配速">✏️</button><button class="btn btn-g" style="font-size:10px;padding:2px 6px;color:#ef4444" onclick="hideFromCompare('${a.id}')" title="隱藏此筆">✕</button></td>`:''}</tr>`}).join('')}</tbody></table></div>`;
+      const humidCell=isSwim?'':`<td style="font-size:13px;color:#94a3b8">${a.humidity!=null?a.humidity+'%':'--'}</td>`;
+      return`<tr><td>${a.date}</td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</td><td>${a.distance} km</td><td style="font-family:monospace">${fmtDur(a.duration)}</td><td style="font-weight:600;color:${COLORS[a.type]};font-family:monospace">${fmtPace(a.type,pace)}${editedMark}</td>${powerCell}${gearCell}${tempCell}${humidCell}<td>${a.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${a.rpe}/10</span>`:'--'}</td>${adm?`<td style="white-space:nowrap">${resetBtn}<button class="btn btn-g" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editMovingPace('${a.id}')" title="修改配速">✏️</button><button class="btn btn-g" style="font-size:10px;padding:2px 6px;color:#ef4444" onclick="hideFromCompare('${a.id}')" title="隱藏此筆">✕</button></td>`:''}</tr>`}).join('')}</tbody></table></div>`;
   }
   c.appendChild(tCard);
   c.appendChild(chartRow);
@@ -901,8 +902,8 @@ function renderPredict(){
   const vCard=el('div',{class:'card'});
   vCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">🏅 歷次比賽 VDOT 值（含體感溫度修正）</h3>
   ${allRaceVdots.length===0?'<div style="padding:20px;color:#475569;text-align:center">沒有比賽紀錄</div>':
-  `<div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>比賽</th><th>距離</th><th>完賽時間</th><th>配速</th><th>體感溫度</th><th>原始 VDOT</th><th>修正 VDOT</th></tr></thead><tbody>
-  ${allRaceVdots.map(v=>`<tr><td>${v.race.date}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.race.name}</td><td>${v.race.distance} km</td><td style="font-family:monospace">${fmtDur(v.race.duration)}</td><td style="font-family:monospace;color:${COLORS.running}">${fmtPace('running',v.race.avgPace)}</td><td style="font-size:13px;color:#94a3b8">${v.temp!=null?v.temp+'°C':'--'}</td><td style="font-family:monospace">${v.rawVdot.toFixed(1)}</td><td style="font-weight:700;color:#3b82f6;font-family:monospace">${v.adjVdot.toFixed(1)}</td></tr>`).join('')}</tbody></table></div>`}`;
+  `<div style="max-height:400px;overflow-y:auto"><table><thead><tr><th>日期</th><th>比賽</th><th>距離</th><th>完賽時間</th><th>配速</th><th>體感溫度</th><th title="完跑時刻的相對濕度(Open-Meteo,跟體感溫度同時間點)">完跑時的濕度</th><th>原始 VDOT</th><th>修正 VDOT</th></tr></thead><tbody>
+  ${allRaceVdots.map(v=>`<tr><td>${v.race.date}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.race.name}</td><td>${v.race.distance} km</td><td style="font-family:monospace">${fmtDur(v.race.duration)}</td><td style="font-family:monospace;color:${COLORS.running}">${fmtPace('running',v.race.avgPace)}</td><td style="font-size:13px;color:#94a3b8">${v.temp!=null?v.temp+'°C':'--'}</td><td style="font-size:13px;color:#94a3b8">${v.race.humidity!=null?v.race.humidity+'%':'--'}</td><td style="font-family:monospace">${v.rawVdot.toFixed(1)}</td><td style="font-weight:700;color:#3b82f6;font-family:monospace">${v.adjVdot.toFixed(1)}</td></tr>`).join('')}</tbody></table></div>`}`;
   c.appendChild(vCard);
 
   // ── 下半部：走勢圖 + 獨立日期控制 ──
@@ -1160,7 +1161,7 @@ function renderRaces(){
     const fmtSplit=s=>s?fmtDur(s):'<span style="color:#475569">--</span>';
     if(isTriCat){
       gCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">🏆 ${displayCat}</h3>
-      <table><thead><tr><th>日期</th><th>賽事名稱</th><th>距離</th><th>完賽時間</th><th>🏊 游泳</th><th>T1</th><th>🚴 騎車</th><th>T2</th><th>🏃 跑步</th><th>體感溫度</th>${isAdmin()?'<th>操作</th>':''}</tr></thead>
+      <table><thead><tr><th>日期</th><th>賽事名稱</th><th>距離</th><th>完賽時間</th><th>🏊 游泳</th><th>T1</th><th>🚴 騎車</th><th>T2</th><th>🏃 跑步</th><th>體感溫度</th><th title="完跑時刻的相對濕度(Open-Meteo,跟體感溫度同時間點)">完跑時的濕度</th>${isAdmin()?'<th>操作</th>':''}</tr></thead>
       <tbody>${list.map(r=>{
         const sp=r.triSplits||{};
         return`<tr><td>${r.date}</td><td>${r.name}</td><td>${r.distance} km</td>
@@ -1171,10 +1172,11 @@ function renderRaces(){
         <td style="font-family:monospace;color:#94a3b8">${fmtSplit(sp.T2)}</td>
         <td style="font-family:monospace;color:${COLORS.running}">${fmtSplit(sp.run)}</td>
         <td style="font-size:13px;color:#94a3b8">${r.temperature!=null?r.temperature+'°C':'--'}</td>
+        <td style="font-size:13px;color:#94a3b8">${r.humidity!=null?r.humidity+'%':'--'}</td>
         ${isAdmin()?`<td><button class="btn btn-g" style="font-size:11px;padding:3px 8px;color:#ef4444" onclick="toggleRace('${r.id}')">移除標記</button></td>`:''}</tr>`}).join('')}</tbody></table>`;
     }else{
       gCard.innerHTML=`<h3 style="font-size:15px;font-weight:600;margin-bottom:12px">🏆 ${displayCat}</h3>
-      <table><thead><tr><th>日期</th><th>賽事名稱</th><th>距離</th><th>完賽時間</th><th>配速</th><th>體感溫度</th><th>RPE</th><th>VDOT</th><th>修正 VDOT</th>${isAdmin()?'<th>操作</th>':''}</tr></thead>
+      <table><thead><tr><th>日期</th><th>賽事名稱</th><th>距離</th><th>完賽時間</th><th>配速</th><th>體感溫度</th><th title="完跑時刻的相對濕度(Open-Meteo,跟體感溫度同時間點)">完跑時的濕度</th><th>RPE</th><th>VDOT</th><th>修正 VDOT</th>${isAdmin()?'<th>操作</th>':''}</tr></thead>
       <tbody>${list.map(r=>{
         const rawVdot=r.type==='running'&&!isTri(r)?calcVDOT(r.distance,r.duration):null;
         const adjVdot=rawVdot!=null?tempAdjustVDOT(rawVdot,r.temperature):null;
@@ -1183,6 +1185,7 @@ function renderRaces(){
         <td style="font-family:monospace;font-weight:600;font-size:15px">${fmtDur(r.duration)}</td>
         <td style="font-family:monospace;color:${COLORS[r.type]}">${fmtPace(r.type,r.avgPace)}</td>
         <td style="font-size:13px;color:#94a3b8">${r.temperature!=null?r.temperature+'°C':'--'}</td>
+        <td style="font-size:13px;color:#94a3b8">${r.humidity!=null?r.humidity+'%':'--'}</td>
         <td>${r.rpe?`<span style="background:${rpeColor}25;color:${rpeColor};padding:2px 8px;border-radius:8px;font-size:12px;font-weight:600">${r.rpe}/10</span>`:'--'}</td>
         <td style="font-family:monospace">${rawVdot!=null?rawVdot.toFixed(1):'--'}</td>
         <td style="font-weight:700;color:#3b82f6;font-family:monospace">${adjVdot!=null?adjVdot.toFixed(1):'--'}</td>
